@@ -1,1 +1,11 @@
 target/*
+2024-07-12_orlando_raw_bams/MV411-00nM_H3K79me2.bam
+2024-07-12_orlando_raw_bams/MV411-00nM_Input.bam
+2024-07-12_orlando_raw_bams/MV411-2nM_H3K79me2.bam
+2024-07-12_orlando_raw_bams/MV411-2nM_Input.bam
+2024-07-12_orlando_raw_bams/MV411-05nM_H3K79me2.bam
+2024-07-12_orlando_raw_bams/MV411-5nM_H3K79me2.bam
+2024-07-12_orlando_raw_bams/MV411-05nM_Input.bam
+2024-07-12_orlando_raw_bams/MV411-5nM_Input.bam
+2024-07-12_orlando_raw_bams/resources/all_normalisation_factors.json
+2024-07-12_orlando_raw_bams/resources/all_normalisation_factors.tsv
