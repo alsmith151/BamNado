@@ -1,5 +1,5 @@
 [package]
-name = "bamtk"
+name = "bam-nado"
 version = "0.1.0"
 edition = "2021"
 
@@ -15,7 +15,7 @@ indicatif = {version = "*", features = ["rayon"]}
 itertools = "*"
 log = "0.4.22"
 noodles = {version = '0.77.0', features = ['bam', 'bgzf', 'cram', 'sam', 'bed', 'core', 'csi']}
-polars = "0.41.2"
+polars = "*"
 rayon = "1.10.0"
 rust-lapper = "1.1.0"
 tempfile = "3.10.1"
@@ -24,3 +24,4 @@ crossbeam = "*"
 serde_json = "*"
 sprs = "0.11.1"
 ndarray = "0.15.0"
+pyo3 = { version = "*", features = ["extension-module"] }
