@@ -1,8 +1,7 @@
 use ahash::{HashMap, HashSet, HashSetExt};
-use serde::ser::SerializeStruct;
-use serde::Serializer;
 use noodles::sam::header;
 use noodles::{bam, sam};
+use serde::ser::SerializeStruct;
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
 use std::path::{Path, PathBuf};
@@ -10,9 +9,9 @@ use std::prelude::rust_2021::*;
 
 use anyhow::Result;
 use crossbeam::channel::unbounded;
+use log::{error, info};
 use noodles::bam::record::Record;
 use noodles::sam::alignment::RecordBuf;
-use log::{info, error};
 
 #[derive(Debug, Deserialize)]
 pub struct SplitStats {
@@ -45,7 +44,6 @@ impl SplitStats {
     }
 
     fn spikein_norm_factor(&self) -> f64 {
-
         // Calculate the ChIP spike-in normalization factor
         // df_counts["scale_factor"] = 1 / (df_counts["spikein_reads"] / 1e6)
         // # if df_counts["norm_factor"] == inf change to 1
@@ -61,12 +59,11 @@ impl SplitStats {
     }
 
     fn spikein_percentage(&self) -> f64 {
-       (self.n_exogenous as f64 / self.n_endogenous as f64) * 100.0
+        (self.n_exogenous as f64 / self.n_endogenous as f64) * 100.0
     }
-
 }
 
-impl Display for SplitStats{
+impl Display for SplitStats {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Statistics for {}\n", self.filename)?;
         write!(f, "Total reads: {}\n", self.n_total_reads)?;
@@ -106,7 +103,6 @@ impl Serialize for SplitStats {
     }
 }
 
-
 pub struct BamSplitter {
     // The input BAM file
     input_bam: bam::io::Reader<noodles::bgzf::Reader<std::fs::File>>,
@@ -127,7 +123,6 @@ pub struct BamSplitter {
     exogenous_header: sam::Header,
     both_header: sam::Header,
     unmapped_header: sam::Header,
-
 
     // The statistics for the split
     stats: SplitStats,
@@ -174,7 +169,6 @@ impl BamSplitter {
         let header_both_genomes = header_input.clone();
         let header_unmapped = header_input.clone();
 
-
         let stats = SplitStats::new(
             input_path
                 .file_name()
@@ -183,7 +177,6 @@ impl BamSplitter {
                 .expect("Failed to convert to string")
                 .to_string(),
         );
-
 
         Ok(Self {
             input_bam,
@@ -319,7 +312,6 @@ impl BamSplitter {
                     .send(record.clone())
                     .expect("Failed to send record");
             } else {
-                
                 let ref_seq_id = match record.reference_sequence_id() {
                     Some(Ok(id)) => id,
                     _ => {
@@ -355,11 +347,16 @@ impl BamSplitter {
         drop(tx_unmapped);
 
         // Wait for the writer threads to finish
-        endogenous_writer.join().expect("Failed to join writer thread");
-        exogenous_writer.join().expect("Failed to join writer thread");
+        endogenous_writer
+            .join()
+            .expect("Failed to join writer thread");
+        exogenous_writer
+            .join()
+            .expect("Failed to join writer thread");
         both_writer.join().expect("Failed to join writer thread");
-        unmapped_writer.join().expect("Failed to join writer thread");
-
+        unmapped_writer
+            .join()
+            .expect("Failed to join writer thread");
 
         // Print the statistics
         info!("Separation statistics for {}", self.stats.filename);
@@ -387,7 +384,4 @@ impl BamSplitter {
     pub fn unmapped_file(&self) -> &Path {
         &self.unmapped_bam
     }
-
-
-
 }
