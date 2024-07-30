@@ -12,23 +12,9 @@ mod filter;
 mod intervals;
 mod spikein;
 mod utils;
+// mod meta;
 
-enum FileType {
-    Bedgraph,
-    Bigwig,
-}
-
-impl FileType {
-    fn from_str(s: &str) -> Result<FileType, String> {
-        match s.to_lowercase().as_str() {
-            "bedgraph" => Ok(FileType::Bedgraph),
-            "bdg" => Ok(FileType::Bedgraph),
-            "bigwig" => Ok(FileType::Bigwig),
-            "bw" => Ok(FileType::Bigwig),
-            _ => Err(format!("Unknown file type: {}", s)),
-        }
-    }
-}
+use crate::utils::FileType;
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]

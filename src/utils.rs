@@ -5,14 +5,18 @@ use bio_types::annot::contig;
 use bio_types::annot::contig::Contig;
 use bio_types::genome::Length;
 use bio_types::strand::ReqStrand;
+use crossbeam::epoch::Pointable;
 use log::{debug, info, warn};
+use noodles::core::region;
 use noodles::csi::binning_index::BinningIndex;
 use noodles::{bam, sam};
 use polars::prelude::*;
 use rust_lapper::Interval;
 use std::io::Write;
+use std::ops::Bound;
 use std::path::{Path, PathBuf};
 use noodles::core::{Region, Position};
+use rust_lapper::Lapper;
 
 pub const CB: [u8; 2] = [b'C', b'B'];
 pub type Iv = Interval<usize, u32>;
@@ -364,4 +368,60 @@ impl BamStats {
         }
         Ok(())
     }
+}
+
+
+
+pub enum FileType {
+    Bedgraph,
+    Bigwig,
+}
+
+impl FileType {
+    pub fn from_str(s: &str) -> Result<FileType, String> {
+        match s.to_lowercase().as_str() {
+            "bedgraph" => Ok(FileType::Bedgraph),
+            "bdg" => Ok(FileType::Bedgraph),
+            "bigwig" => Ok(FileType::Bigwig),
+            "bw" => Ok(FileType::Bigwig),
+            _ => Err(format!("Unknown file type: {}", s)),
+        }
+    }
+}
+
+
+pub fn regions_to_lapper(regions: Vec<Region>) -> Result<HashMap<String, Lapper<usize, u32>>>{
+
+    let mut lapper: HashMap<String, Lapper<usize, u32>> = HashMap::new();
+    let mut intervals: HashMap<String, Vec<Iv>> = HashMap::new();
+
+    for reg in regions {
+        let chrom = reg.name().to_string();
+        let start = reg.start().map(|x| x.get());
+        let end = reg.end().map(|x| x.get());
+
+        let start = match start {
+            Bound::Included(start) => start,
+            Bound::Excluded(start) => start + 1,
+            _ => 0,
+        };
+
+        let end = match end {
+            Bound::Included(end) => end,
+            Bound::Excluded(end) => end - 1,
+            _ => 0,
+        };
+        
+        let iv = Iv{start: start.into(), stop: end.into(), val: 0};
+        intervals.entry(chrom.clone()).or_insert(Vec::new()).push(iv);
+    }
+
+    for (chrom, ivs) in intervals.iter() {
+        let lap = Lapper::new(ivs.to_vec());
+        lapper.insert(chrom.clone(), lap);
+    }
+
+    Ok(lapper)
+
+
 }
