@@ -8,15 +8,15 @@ use bio_types::strand::ReqStrand;
 use crossbeam::epoch::Pointable;
 use log::{debug, info, warn};
 use noodles::core::region;
+use noodles::core::{Position, Region};
 use noodles::csi::binning_index::BinningIndex;
 use noodles::{bam, sam};
 use polars::prelude::*;
 use rust_lapper::Interval;
+use rust_lapper::Lapper;
 use std::io::Write;
 use std::ops::Bound;
 use std::path::{Path, PathBuf};
-use noodles::core::{Region, Position};
-use rust_lapper::Lapper;
 
 pub const CB: [u8; 2] = [b'C', b'B'];
 pub type Iv = Interval<usize, u32>;
@@ -290,11 +290,10 @@ impl BamStats {
             .chrom_stats
             .iter()
             .map(|(chrom, stats)| {
-                
                 let mut chunks = Vec::new();
                 let mut chunk_start = 1;
                 let chrom_end = stats.length;
-                
+
                 while chunk_start <= chrom_end {
                     // Corrected to include the last position in the range
                     let chunk_end = chunk_start + genome_chunk_length - 1; // Adjust to ensure the chunk covers exactly genome_chunk_length positions
@@ -313,10 +312,8 @@ impl BamStats {
             .collect();
 
         Ok(chrom_chunks)
+    }
 
-
-        }
-        
     pub fn ref_id_mapping(&self) -> HashMap<usize, String> {
         let mut ref_id_mapping = HashMap::new();
         for (i, (name, _)) in self.header.reference_sequences().iter().enumerate() {
@@ -370,8 +367,6 @@ impl BamStats {
     }
 }
 
-
-
 pub enum FileType {
     Bedgraph,
     Bigwig,
@@ -389,9 +384,7 @@ impl FileType {
     }
 }
 
-
-pub fn regions_to_lapper(regions: Vec<Region>) -> Result<HashMap<String, Lapper<usize, u32>>>{
-
+pub fn regions_to_lapper(regions: Vec<Region>) -> Result<HashMap<String, Lapper<usize, u32>>> {
     let mut lapper: HashMap<String, Lapper<usize, u32>> = HashMap::new();
     let mut intervals: HashMap<String, Vec<Iv>> = HashMap::new();
 
@@ -411,9 +404,16 @@ pub fn regions_to_lapper(regions: Vec<Region>) -> Result<HashMap<String, Lapper<
             Bound::Excluded(end) => end - 1,
             _ => 0,
         };
-        
-        let iv = Iv{start: start.into(), stop: end.into(), val: 0};
-        intervals.entry(chrom.clone()).or_insert(Vec::new()).push(iv);
+
+        let iv = Iv {
+            start: start.into(),
+            stop: end.into(),
+            val: 0,
+        };
+        intervals
+            .entry(chrom.clone())
+            .or_insert(Vec::new())
+            .push(iv);
     }
 
     for (chrom, ivs) in intervals.iter() {
@@ -422,6 +422,54 @@ pub fn regions_to_lapper(regions: Vec<Region>) -> Result<HashMap<String, Lapper<
     }
 
     Ok(lapper)
+}
 
+/// Get the header of a BAM file
+/// If the noodles crate fails to read the header, we fall back to samtools
+/// This is a bit of a hack but it works for now
+/// The noodles crate is more strict about the header format than samtools
+pub fn get_bam_header(file_path: PathBuf) -> Result<sam::Header> {
+    // Check that the file exists
+    if !file_path.exists() {
+        return Err(anyhow::Error::from(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("File not found: {}", file_path.display()),
+        )));
+    };
 
+    let mut reader = bam::io::indexed_reader::Builder::default()
+        .build_from_path(file_path.clone())
+        .expect("Failed to open file");
+
+    let header = match reader.read_header() {
+        std::result::Result::Ok(header) => header,
+        Err(e) => {
+            debug!(
+                "Failed to read header using noodels falling back to samtools: {}",
+                e
+            );
+
+            let header_samtools = std::process::Command::new("samtools")
+                .arg("view")
+                .arg("-H")
+                .arg(file_path.clone())
+                .output()
+                .expect("Failed to run samtools")
+                .stdout;
+
+            let header_str =
+                String::from_utf8(header_samtools).expect("Failed to convert header to string");
+
+            // Slight hack here for CellRanger BAM files that are missing the version info
+            let header_string =
+                header_str.replace("@HD\tSO:coordinate\n", "@HD\tVN:1.6\tSO:coordinate\n");
+            let header_str = header_string.as_bytes();
+            let mut reader = sam::io::Reader::new(header_str);
+            let header = reader
+                .read_header()
+                .expect("Failed to read header with samtools");
+            header
+        }
+    };
+    Ok(header)
 }
