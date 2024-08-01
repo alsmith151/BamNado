@@ -147,8 +147,6 @@ impl BamPileup {
                     })
                     .collect::<Vec<Iv>>();
 
-                println!("Number of intervals {}", intervals.len());
-
                 // Create a lapper from the intervals
                 let lapper = Lapper::new(intervals);
 

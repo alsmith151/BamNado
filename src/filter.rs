@@ -66,8 +66,24 @@ impl Display for BamReadFilter {
         writeln!(f, "\tMinimum mapping quality: {}", self.min_mapq)?;
         writeln!(f, "\tMinimum read length: {}", self.min_length)?;
         writeln!(f, "\tMaximum read length: {}", self.max_length)?;
-        writeln!(f, "\tNumber of Blacklisted locations: {:?}", self.blacklisted_locations)?;
-        writeln!(f, "\tNumber of Whitelisted barcodes: {:?}", self.whitelisted_barcodes)?;
+
+        match &self.blacklisted_locations {
+            Some(blacklisted_locations) => {
+                writeln!(f, "\tNumber of Blacklisted locations: {:?}", blacklisted_locations.len())?;
+            }
+            None => {
+                writeln!(f, "\tNumber of Blacklisted locations: 0")?;
+            }
+        }
+
+        match &self.whitelisted_barcodes {
+            Some(whitelisted_barcodes) => {
+                writeln!(f, "\tNumber of Whitelisted barcodes: {:?}", whitelisted_barcodes.len())?;
+            }
+            None => {
+                writeln!(f, "\tNumber of Whitelisted barcodes: 0")?;
+            }
+        }
         Ok(())
     }
 }
