@@ -16,7 +16,7 @@ use std::fmt::Display;
 
 use crate::filter::BamReadFilter;
 use crate::intervals::IntervalMaker;
-use crate::utils::{progress_bar, BamStats, Iv, NormalizationMethod};
+use crate::utils::{progress_bar, BamStats, Iv, NormalizationMethod, get_bam_header};
 
 struct BedgraphRecord {
     start: u64,
@@ -115,7 +115,7 @@ impl BamPileup {
                     .build_from_path(self.file_path.clone())
                     .expect("Error opening BAM file");
                 // Extract the header
-                let header = reader.read_header().expect("Error reading BAM header");
+                let header = get_bam_header(self.file_path.clone()).expect("Error getting BAM header");
 
                 // Fetch the reads in the region
                 let records = reader
@@ -148,7 +148,7 @@ impl BamPileup {
                     .collect::<Vec<Iv>>();
 
                 // Create a lapper from the intervals
-                let mut lapper = Lapper::new(intervals);
+                let lapper = Lapper::new(intervals);
 
                 // Iterate over bins within the given region and count the reads using the lapper
                 let mut bin_counts: Vec<Iv> = Vec::new();
