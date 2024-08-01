@@ -3,6 +3,7 @@ use noodles::{bam, sam::alignment::record::data::field::Value};
 use rust_lapper::Lapper;
 use std::fmt::Display;
 use std::sync::{Arc, Mutex};
+use anyhow::Result;
 
 use crate::utils::CB;
 
@@ -168,11 +169,18 @@ impl BamReadFilter {
         // Filter by blacklisted barcodes
         if let Some(barcodes) = &self.whitelisted_barcodes {
             let barcode = get_cell_barcode(alignment);
-            if barcodes.contains(&barcode) {
-                return true;
-            } else {
-                self.stats.lock().unwrap().n_failed_barcode += 1;
-                return false;
+
+            match barcode {
+                Some(barcode) => {
+                    if !barcodes.contains(&barcode) {
+                        self.stats.lock().unwrap().n_failed_barcode += 1;
+                        return false;
+                    }
+                }
+                None => {
+                    self.stats.lock().unwrap().n_failed_barcode += 1;
+                    return false;
+                }
             }
         };
         true
@@ -187,15 +195,13 @@ impl BamReadFilter {
 }
 
 /// Get the cell barcode from a BAM alignment.
-fn get_cell_barcode(alignment: &bam::Record) -> String {
+fn get_cell_barcode(alignment: &bam::Record) -> Option<String> {
     let tags = alignment.data();
-    let barcode_tag = tags
-        .get(&CB)
-        .expect("No CB tag")
-        .expect("Failed to get CB tag");
+    let cb = tags.get(&CB);
 
-    match barcode_tag {
-        Value::String(barcode) => barcode.to_string(),
-        _ => panic!("CB tag is not a string"),
+    match cb {
+        Some(Ok(Value::String(barcode))) => Some(barcode.to_string()),
+        _ => None,
     }
+
 }
