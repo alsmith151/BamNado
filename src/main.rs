@@ -16,84 +16,126 @@ mod utils;
 
 use crate::utils::FileType;
 
+
+pub fn get_styles() -> clap::builder::Styles {
+    clap::builder::Styles::styled()
+        .usage(
+            anstyle::Style::new()
+                .bold()
+                .underline()
+                .fg_color(Some(anstyle::Color::Ansi(anstyle::AnsiColor::Yellow))),
+        )
+        .header(
+            anstyle::Style::new()
+                .bold()
+                .underline()
+                .fg_color(Some(anstyle::Color::Ansi(anstyle::AnsiColor::Yellow))),
+        )
+        .literal(
+            anstyle::Style::new().fg_color(Some(anstyle::Color::Ansi(anstyle::AnsiColor::Green))),
+        )
+        .invalid(
+            anstyle::Style::new()
+                .bold()
+                .fg_color(Some(anstyle::Color::Ansi(anstyle::AnsiColor::Red))),
+        )
+        .error(
+            anstyle::Style::new()
+                .bold()
+                .fg_color(Some(anstyle::Color::Ansi(anstyle::AnsiColor::Red))),
+        )
+        .valid(
+            anstyle::Style::new()
+                .bold()
+                .underline()
+                .fg_color(Some(anstyle::Color::Ansi(anstyle::AnsiColor::Green))),
+        )
+        .placeholder(
+            anstyle::Style::new().fg_color(Some(anstyle::Color::Ansi(anstyle::AnsiColor::White))),
+        )
+}
+
+
 #[derive(Parser)]
-#[command(author, version, about, long_about = None)]
+#[command(author, version, about, long_about = None, styles=get_styles())]
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
 
-    // Verbosity level
+    /// Verbosity level
     #[arg(short, long, required = false, default_value = "0")]
     verbose: u8,
 
     // Filter parameters
-    // Properly paired reads only
+    /// Properly paired reads only
     #[arg(long, action = clap::ArgAction::SetTrue)]
     proper_pair: bool,
 
-    // Minimum mapping quality
-    #[arg(long, required = false, default_value = "0")]
+    /// Minimum mapping quality
+    #[arg(long, required = false, default_value = "20")]
     min_mapq: u8,
 
-    // Minimum read length
-    #[arg(long, required = false, default_value = "0")]
+    /// Minimum read length
+    #[arg(long, required = false, default_value = "20")]
     min_length: u32,
 
-    // Maximum read length
-    #[arg(long, required = false, default_value = "500")]
+    /// Maximum read length
+    #[arg(long, required = false, default_value = "1000")]
     max_length: u32,
 
-    // Blacklisted locations in BED format
+    /// Blacklisted locations in BED format
     #[arg(long, required = false)]
     blacklisted_locations: Option<PathBuf>,
 
-    // Whitelisted barcodes in a text file (one barcode per line)
+    /// Whitelisted barcodes in a text file (one barcode per line)
     #[arg(long, required = false)]
     whitelisted_barcodes: Option<PathBuf>,
 }
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Calculate coverage from a BAM file and write to a bedGraph or bigWig file
     BamCoverage {
-        // Bam file for processing
+        /// Bam file for processing
         #[arg(short, long)]
         bam: PathBuf,
 
-        // Output file name
+        /// Output file name
         #[arg(short, long)]
         output: Option<PathBuf>,
 
-        // Bin size for coverage calculation
-        #[arg(short, long)]
+        /// Bin size for coverage calculation
+        #[arg(short = 's', long)]
         bin_size: Option<u64>,
 
-        // Normalization method to use
+        /// Normalization method to use
         #[arg(short, long, default_value = "raw")]
         norm_method: Option<utils::NormalizationMethod>,
 
-        // Scaling factor for the pileup
-        #[arg(short, long)]
+        /// Scaling factor for the pileup
+        #[arg(short = 'f', long)]
         scale_factor: Option<f32>,
 
-        // Use the fragment or the read for counting
+        /// Use the fragment or the read for counting
         #[arg(long, action = clap::ArgAction::SetTrue)]
         use_fragment: bool,
     },
 
+    /// Split a BAM file into endogenous and exogenous reads
     SplitExogenous {
-        // Input BAM file
+        /// Input BAM file
         #[arg(short, long)]
         input: PathBuf,
 
-        // Output prefix
+        /// Output prefix
         #[arg(short, long)]
         output: PathBuf,
 
-        // Prefix for exogenous sequences
+        /// Prefix for exogenous sequences
         #[arg(short, long)]
         exogenous_prefix: String,
 
-        // Path for stats output
+        /// Path for stats output
         #[arg(short, long)]
         stats: Option<PathBuf>,
     },
