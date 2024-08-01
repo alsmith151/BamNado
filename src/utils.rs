@@ -1,5 +1,4 @@
-use ahash::AHashMap as HashMap;
-use ahash::AHashSet as HashSet;
+use ahash::{HashMap, HashSet};
 use anyhow::Result;
 use bio_types::annot::contig;
 use bio_types::annot::contig::Contig;
@@ -42,22 +41,26 @@ pub struct CellBarcodes {
 impl CellBarcodes {
     pub fn new() -> Self {
         Self {
-            barcodes: HashSet::new(),
+            barcodes: HashSet::default(),
         }
+    }
+
+    pub fn barcodes(&self) -> HashSet<String> {
+        self.barcodes.clone()
     }
 
     pub fn is_empty(&self) -> bool {
         self.barcodes.is_empty()
     }
 
-    pub fn from_csv(file_path: &str) -> Result<Self> {
+    pub fn from_csv(file_path: &PathBuf) -> Result<Self> {
         let path = Path::new(file_path).to_path_buf();
 
         let df = CsvReadOptions::default()
             .with_has_header(true)
             .try_into_reader_with_file_path(Some(path))?
             .finish()?;
-        let mut barcodes = HashSet::new();
+        let mut barcodes = HashSet::default();
 
         for barcode in df.column("barcode").unwrap().str().unwrap() {
             let barcode = barcode.unwrap().to_string();
@@ -220,7 +223,7 @@ impl BamStats {
         let index = bam_reader.index();
 
         // Get the chromosome stats
-        let mut chrom_stats = HashMap::new();
+        let mut chrom_stats = HashMap::default();
 
         for ((reference_sequence_name_buf, reference_sequence), index_reference_sequence) in header
             .reference_sequences()
@@ -315,7 +318,7 @@ impl BamStats {
     }
 
     pub fn ref_id_mapping(&self) -> HashMap<usize, String> {
-        let mut ref_id_mapping = HashMap::new();
+        let mut ref_id_mapping = HashMap::default();
         for (i, (name, _)) in self.header.reference_sequences().iter().enumerate() {
             let name = std::str::from_utf8(name)
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))
@@ -327,7 +330,7 @@ impl BamStats {
     }
 
     pub fn chromsizes_ref_id(&self) -> Result<HashMap<usize, u64>> {
-        let mut chromsizes = HashMap::new();
+        let mut chromsizes = HashMap::default();
         for (i, (_, map)) in self.header.reference_sequences().iter().enumerate() {
             let length = map.length().get();
             chromsizes.insert(i, length as u64);
@@ -336,7 +339,7 @@ impl BamStats {
     }
 
     pub fn chromsizes_ref_name(&self) -> Result<HashMap<String, u64>> {
-        let mut chromsizes = HashMap::new();
+        let mut chromsizes = HashMap::default();
         for (name, map) in self.header.reference_sequences() {
             let length = map.length().get();
             let name = std::str::from_utf8(name)
@@ -385,8 +388,8 @@ impl FileType {
 }
 
 pub fn regions_to_lapper(regions: Vec<Region>) -> Result<HashMap<String, Lapper<usize, u32>>> {
-    let mut lapper: HashMap<String, Lapper<usize, u32>> = HashMap::new();
-    let mut intervals: HashMap<String, Vec<Iv>> = HashMap::new();
+    let mut lapper: HashMap<String, Lapper<usize, u32>> = HashMap::default();
+    let mut intervals: HashMap<String, Vec<Iv>> = HashMap::default();
 
     for reg in regions {
         let chrom = reg.name().to_string();
