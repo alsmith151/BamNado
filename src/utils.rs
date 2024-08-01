@@ -1,5 +1,4 @@
-use ahash::AHashMap as HashMap;
-use ahash::AHashSet as HashSet;
+use ahash::{HashMap, HashSet};
 use anyhow::Result;
 use bio_types::annot::contig;
 use bio_types::annot::contig::Contig;
@@ -8,15 +7,15 @@ use bio_types::strand::ReqStrand;
 use crossbeam::epoch::Pointable;
 use log::{debug, info, warn};
 use noodles::core::region;
+use noodles::core::{Position, Region};
 use noodles::csi::binning_index::BinningIndex;
 use noodles::{bam, sam};
 use polars::prelude::*;
 use rust_lapper::Interval;
+use rust_lapper::Lapper;
 use std::io::Write;
 use std::ops::Bound;
 use std::path::{Path, PathBuf};
-use noodles::core::{Region, Position};
-use rust_lapper::Lapper;
 
 pub const CB: [u8; 2] = [b'C', b'B'];
 pub type Iv = Interval<usize, u32>;
@@ -42,22 +41,26 @@ pub struct CellBarcodes {
 impl CellBarcodes {
     pub fn new() -> Self {
         Self {
-            barcodes: HashSet::new(),
+            barcodes: HashSet::default(),
         }
+    }
+
+    pub fn barcodes(&self) -> HashSet<String> {
+        self.barcodes.clone()
     }
 
     pub fn is_empty(&self) -> bool {
         self.barcodes.is_empty()
     }
 
-    pub fn from_csv(file_path: &str) -> Result<Self> {
+    pub fn from_csv(file_path: &PathBuf) -> Result<Self> {
         let path = Path::new(file_path).to_path_buf();
 
         let df = CsvReadOptions::default()
             .with_has_header(true)
             .try_into_reader_with_file_path(Some(path))?
             .finish()?;
-        let mut barcodes = HashSet::new();
+        let mut barcodes = HashSet::default();
 
         for barcode in df.column("barcode").unwrap().str().unwrap() {
             let barcode = barcode.unwrap().to_string();
@@ -220,7 +223,7 @@ impl BamStats {
         let index = bam_reader.index();
 
         // Get the chromosome stats
-        let mut chrom_stats = HashMap::new();
+        let mut chrom_stats = HashMap::default();
 
         for ((reference_sequence_name_buf, reference_sequence), index_reference_sequence) in header
             .reference_sequences()
@@ -290,11 +293,10 @@ impl BamStats {
             .chrom_stats
             .iter()
             .map(|(chrom, stats)| {
-                
                 let mut chunks = Vec::new();
                 let mut chunk_start = 1;
                 let chrom_end = stats.length;
-                
+
                 while chunk_start <= chrom_end {
                     // Corrected to include the last position in the range
                     let chunk_end = chunk_start + genome_chunk_length - 1; // Adjust to ensure the chunk covers exactly genome_chunk_length positions
@@ -313,12 +315,10 @@ impl BamStats {
             .collect();
 
         Ok(chrom_chunks)
+    }
 
-
-        }
-        
     pub fn ref_id_mapping(&self) -> HashMap<usize, String> {
-        let mut ref_id_mapping = HashMap::new();
+        let mut ref_id_mapping = HashMap::default();
         for (i, (name, _)) in self.header.reference_sequences().iter().enumerate() {
             let name = std::str::from_utf8(name)
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))
@@ -330,7 +330,7 @@ impl BamStats {
     }
 
     pub fn chromsizes_ref_id(&self) -> Result<HashMap<usize, u64>> {
-        let mut chromsizes = HashMap::new();
+        let mut chromsizes = HashMap::default();
         for (i, (_, map)) in self.header.reference_sequences().iter().enumerate() {
             let length = map.length().get();
             chromsizes.insert(i, length as u64);
@@ -339,7 +339,7 @@ impl BamStats {
     }
 
     pub fn chromsizes_ref_name(&self) -> Result<HashMap<String, u64>> {
-        let mut chromsizes = HashMap::new();
+        let mut chromsizes = HashMap::default();
         for (name, map) in self.header.reference_sequences() {
             let length = map.length().get();
             let name = std::str::from_utf8(name)
@@ -370,8 +370,6 @@ impl BamStats {
     }
 }
 
-
-
 pub enum FileType {
     Bedgraph,
     Bigwig,
@@ -389,11 +387,9 @@ impl FileType {
     }
 }
 
-
-pub fn regions_to_lapper(regions: Vec<Region>) -> Result<HashMap<String, Lapper<usize, u32>>>{
-
-    let mut lapper: HashMap<String, Lapper<usize, u32>> = HashMap::new();
-    let mut intervals: HashMap<String, Vec<Iv>> = HashMap::new();
+pub fn regions_to_lapper(regions: Vec<Region>) -> Result<HashMap<String, Lapper<usize, u32>>> {
+    let mut lapper: HashMap<String, Lapper<usize, u32>> = HashMap::default();
+    let mut intervals: HashMap<String, Vec<Iv>> = HashMap::default();
 
     for reg in regions {
         let chrom = reg.name().to_string();
@@ -411,9 +407,16 @@ pub fn regions_to_lapper(regions: Vec<Region>) -> Result<HashMap<String, Lapper<
             Bound::Excluded(end) => end - 1,
             _ => 0,
         };
-        
-        let iv = Iv{start: start.into(), stop: end.into(), val: 0};
-        intervals.entry(chrom.clone()).or_insert(Vec::new()).push(iv);
+
+        let iv = Iv {
+            start: start.into(),
+            stop: end.into(),
+            val: 0,
+        };
+        intervals
+            .entry(chrom.clone())
+            .or_insert(Vec::new())
+            .push(iv);
     }
 
     for (chrom, ivs) in intervals.iter() {
@@ -422,6 +425,54 @@ pub fn regions_to_lapper(regions: Vec<Region>) -> Result<HashMap<String, Lapper<
     }
 
     Ok(lapper)
+}
 
+/// Get the header of a BAM file
+/// If the noodles crate fails to read the header, we fall back to samtools
+/// This is a bit of a hack but it works for now
+/// The noodles crate is more strict about the header format than samtools
+pub fn get_bam_header(file_path: PathBuf) -> Result<sam::Header> {
+    // Check that the file exists
+    if !file_path.exists() {
+        return Err(anyhow::Error::from(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("File not found: {}", file_path.display()),
+        )));
+    };
 
+    let mut reader = bam::io::indexed_reader::Builder::default()
+        .build_from_path(file_path.clone())
+        .expect("Failed to open file");
+
+    let header = match reader.read_header() {
+        std::result::Result::Ok(header) => header,
+        Err(e) => {
+            debug!(
+                "Failed to read header using noodels falling back to samtools: {}",
+                e
+            );
+
+            let header_samtools = std::process::Command::new("samtools")
+                .arg("view")
+                .arg("-H")
+                .arg(file_path.clone())
+                .output()
+                .expect("Failed to run samtools")
+                .stdout;
+
+            let header_str =
+                String::from_utf8(header_samtools).expect("Failed to convert header to string");
+
+            // Slight hack here for CellRanger BAM files that are missing the version info
+            let header_string =
+                header_str.replace("@HD\tSO:coordinate\n", "@HD\tVN:1.6\tSO:coordinate\n");
+            let header_str = header_string.as_bytes();
+            let mut reader = sam::io::Reader::new(header_str);
+            let header = reader
+                .read_header()
+                .expect("Failed to read header with samtools");
+            header
+        }
+    };
+    Ok(header)
 }

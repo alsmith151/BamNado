@@ -145,6 +145,15 @@ fn main() {
     colog::init();
 
     let cli = Cli::parse();
+
+    let whitelisted_barcodes = match &cli.whitelisted_barcodes {
+        Some(whitelist) => {
+            let barcodes = utils::CellBarcodes::from_csv(whitelist).expect("Failed to read barcodes");
+            Some(barcodes.barcodes())
+        }
+        None => None,
+    };
+
     match &cli.command {
         Some(Commands::BamCoverage {
             bam,
@@ -161,13 +170,15 @@ fn main() {
                 error!("BAM index file does not exist. Please create the index file using samtools index command");
             }
 
+
+
             let filter = filter::BamReadFilter::new(
                 cli.proper_pair,
                 Some(cli.min_mapq),
                 Some(cli.min_length),
                 Some(cli.max_length),
                 None,
-                None,
+                whitelisted_barcodes,
             );
             let coverage = count::BamPileup::new(
                 bam.clone(),
