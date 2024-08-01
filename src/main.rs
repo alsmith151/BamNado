@@ -106,7 +106,7 @@ fn main() {
 
     let whitelisted_barcodes = match &cli.whitelisted_barcodes {
         Some(whitelist) => {
-            let barcodes = utils::CellBarcodes::from_csv(whitelist).unwrap();
+            let barcodes = utils::CellBarcodes::from_csv(whitelist).expect("Failed to read barcodes");
             Some(barcodes.barcodes())
         }
         None => None,
