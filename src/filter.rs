@@ -190,7 +190,7 @@ impl BamReadFilter {
 fn get_cell_barcode(alignment: &bam::Record) -> String {
     let tags = alignment.data();
     let barcode_tag = tags
-        .get(&b"CB")
+        .get(&CB)
         .expect("No CB tag")
         .expect("Failed to get CB tag");
 
