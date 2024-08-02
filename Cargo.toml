@@ -15,7 +15,7 @@ indicatif = {version = "*", features = ["rayon"]}
 itertools = "*"
 log = "0.4.22"
 noodles = {version = '0.77.0', features = ['bam', 'bgzf', 'cram', 'sam', 'bed', 'core', 'csi']}
-polars = "*"
+polars = {version = "*", features = ['lazy']}
 rayon = "1.10.0"
 rust-lapper = "1.1.0"
 tempfile = "3.10.1"
