@@ -332,6 +332,11 @@ fn main() {
                 }
             };
 
+            if bam_files.len() != bam_filters.len() {
+                error!("Number of BAM files and barcodes do not match");
+                exit(1);
+            }
+
             let coverage = count::MultiBamPileup::new(
                 bam_files.iter().map(|x| x.to_path_buf()).collect(),
                 bin_size.unwrap_or(50),

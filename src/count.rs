@@ -469,15 +469,15 @@ fn collapse_equal_bins(df: DataFrame) -> DataFrame {
     let mut end = Vec::new();
     let mut scores = Vec::new();
 
-    let mut prev_score = 0;
+    let mut prev_score: f32 = 0.0;
     let mut prev_start = 0;
     let mut prev_end = 0;
     let mut prev_chrom = "";
 
     let chrom_s = df.column("chrom").unwrap().str().unwrap().into_iter();
-    let start_s = df.column("start").unwrap().u32().unwrap().into_iter();
-    let end_s = df.column("end").unwrap().u32().unwrap().into_iter();
-    let score_s = df.column("score").unwrap().u32().unwrap().into_iter();
+    let start_s = df.column("start").unwrap().u64().unwrap().into_iter();
+    let end_s = df.column("end").unwrap().u64().unwrap().into_iter();
+    let score_s = df.column("score").unwrap().f32().unwrap().into_iter();
 
     for (chrom_val, start_val, end_val, score_val) in izip!(chrom_s, start_s, end_s, score_s) {
         let chrom_val = chrom_val.unwrap();
@@ -565,7 +565,7 @@ impl MultiBamPileup {
         info!("Normalizing using method: {:?}", self.norm_method);
         info!("Scaling factor: {}", self.scale_factor);
         info!("Using fragment for counting: {}", self.use_fragment);
-        info!("Filtering using: {:?}", self.filters);
+        info!("Filtering using: {}", self.filters[0]);
 
         // Iterate over the genomic chunks and pileup the reads
         let pileup = genomic_chunks
@@ -577,10 +577,10 @@ impl MultiBamPileup {
             .map(|region| {
                 let mut pileup = Vec::new();
 
-                for (i, bam_file) in self.file_paths.iter().enumerate() {
+                for i in 0..self.file_paths.len() {
                     let intervals = pileup_chunk(
                         region.clone(),
-                        bam_file.clone(),
+                        self.file_paths[i].clone(),
                         bin_size,
                         chromsizes_refid.clone(),
                         use_fragment,
@@ -625,35 +625,38 @@ impl MultiBamPileup {
                     df.with_column(Series::new(&col_name, score.clone()))
                         .expect("Error adding column to DataFrame");
                 }
-
                 df
+
+
             })
             .reduce(
                 || DataFrame::empty(),
                 |acc, mut df| {
-                    acc.vstack(&mut df).expect("Error stacking DataFrames");
+                    let acc = acc.vstack(&mut df).expect("Error stacking DataFrames");
                     acc
                 },
             );
 
         info!("Pileup complete");
+
         Ok(pileup)
     }
 
     fn pileup_normalised(&self) -> Result<DataFrame> {
         let mut df = self.pileup().expect("Error getting pileup");
+
         let score_cols = (0..self.file_paths.len())
             .map(|i| format!("score_{}", i))
             .collect::<Vec<_>>();
 
         // For each score column, normalise the counts
         for col in score_cols {
-            let n_total_counts = df.column(&col)?.sum::<u32>().unwrap() as u64;
+            let n_total_counts = df.column(&col)?.sum::<u64>().unwrap() as u64;
             let norm_factor =
                 self.norm_method
                     .scale_factor(self.scale_factor, self.bin_size, n_total_counts);
 
-            let norm_column = df.column(&col)?.u32()? * norm_factor;
+            let norm_column = df.column(&col)?.cast(&DataType::Float32)? * norm_factor;
             df.replace(&col, norm_column)?;
         }
         Ok(df)
@@ -694,8 +697,8 @@ impl MultiBamPileup {
             std::fs::File::create(outfile).expect("could not create output bedgraph file");
 
         let df = self.pileup_aggregated().expect("Error getting pileup");
-        let mut df = collapse_equal_bins(df);
-        df.sort(["chrom", "start"], Default::default())?;
+        let df = collapse_equal_bins(df);
+        let mut df = df.sort(["chrom", "start"], Default::default())?;
 
         CsvWriter::new(&mut file)
             .include_header(false)

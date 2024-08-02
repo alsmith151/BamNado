@@ -323,7 +323,7 @@ impl BamStats {
         let stats = &self.chrom_stats;
         let genome_length = stats.values().map(|x| x.length).sum::<u64>();
         let max_reads_per_bp = self.n_mapped as f64 / genome_length as f64;
-        let genome_chunk_length = f64::from(5e6).min(2e6 / (max_reads_per_bp));
+        let genome_chunk_length = f64::from(1e7).min(2e6 / (max_reads_per_bp));
 
         let correction = genome_chunk_length % bin_size as f64;
         let genome_chunk_length = genome_chunk_length - correction;
