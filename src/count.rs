@@ -5,6 +5,7 @@ use bio_types::annot::loc::Loc;
 use indicatif::ParallelProgressIterator;
 use itertools::izip;
 use log::{error, info, warn};
+use noodles::bed::record::score;
 use noodles::core::region::Region;
 use noodles::core::Position;
 use noodles::{bam, bed, core, sam};
@@ -13,6 +14,7 @@ use polars::lazy::dsl::cols;
 use polars::lazy::dsl::mean_horizontal;
 use polars::lazy::dsl::sum_horizontal;
 use polars::prelude::*;
+use pyo3::panic;
 use rayon::prelude::*;
 use rust_lapper::Lapper;
 use std::fmt::Display;
@@ -387,15 +389,13 @@ fn pileup_chunk(
     // Make intervals from the reads in the region
     let intervals = records
         .into_iter()
-        .filter(|r| r.is_ok())
-        .map(|r| r.unwrap())
-        .map(|r| IntervalMaker::new(r, &header, &chromsizes_refid, &filter, use_fragment, None))
-        .map(|i| i.coords())
-        .filter(|c| c.is_some())
-        .map(|c| c.unwrap())
-        .map(|i| Iv {
-            start: i.0,
-            stop: i.1,
+        .filter_map(|r| r.ok())
+        .flat_map(|r| {
+            IntervalMaker::new(r, &header, &chromsizes_refid, &filter, use_fragment, None).coords()
+        })
+        .map(|(start, stop)| Iv {
+            start,
+            stop,
             val: 1,
         })
         .collect::<Vec<Iv>>();
@@ -477,7 +477,19 @@ fn collapse_equal_bins(df: DataFrame) -> DataFrame {
     let chrom_s = df.column("chrom").unwrap().str().unwrap().into_iter();
     let start_s = df.column("start").unwrap().u64().unwrap().into_iter();
     let end_s = df.column("end").unwrap().u64().unwrap().into_iter();
-    let score_s = df.column("score").unwrap().f32().unwrap().into_iter();
+
+    // Get the score column and cast to f32
+    let score_s = match df.column("score") {
+        Ok(s) => match s.dtype() {
+            DataType::Float32 => s,
+            DataType::Float64 => &s.cast(&DataType::Float32).expect("Error casting to f32"),
+            _ => panic!("Score column is not a float"),
+        },
+        Err(_) => {
+            panic!("Error getting score column")
+        }
+    };
+    let score_s = score_s.f32().unwrap().into_iter();
 
     for (chrom_val, start_val, end_val, score_val) in izip!(chrom_s, start_s, end_s, score_s) {
         let chrom_val = chrom_val.unwrap();
@@ -626,8 +638,6 @@ impl MultiBamPileup {
                         .expect("Error adding column to DataFrame");
                 }
                 df
-
-
             })
             .reduce(
                 || DataFrame::empty(),
