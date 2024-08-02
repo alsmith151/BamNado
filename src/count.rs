@@ -1,20 +1,15 @@
 use ahash::HashMap;
 use ahash::HashMapExt;
 use anyhow::Result;
-use bio_types::annot::loc::Loc;
 use indicatif::ParallelProgressIterator;
 use itertools::izip;
 use log::{error, info, warn};
-use noodles::bed::record::score;
+use noodles::bam;
 use noodles::core::region::Region;
-use noodles::core::Position;
-use noodles::{bam, bed, core, sam};
-use polars::frame::NullStrategy;
 use polars::lazy::dsl::cols;
 use polars::lazy::dsl::mean_horizontal;
 use polars::lazy::dsl::sum_horizontal;
 use polars::prelude::*;
-use pyo3::panic;
 use rayon::prelude::*;
 use rust_lapper::Lapper;
 use std::fmt::Display;
@@ -24,12 +19,6 @@ use tempfile;
 use crate::filter::BamReadFilter;
 use crate::intervals::IntervalMaker;
 use crate::utils::{get_bam_header, progress_bar, BamStats, Iv, NormalizationMethod};
-
-struct BedgraphRecord {
-    start: u64,
-    end: u64,
-    score: f32,
-}
 
 pub struct BamPileup {
     // The input BAM file
@@ -171,8 +160,6 @@ impl BamPileup {
                     .get();
                 let bin_starts = (region_start..region_end).step_by(self.bin_size as usize); // Corrected to include the end in the range
                 let bin_ends = bin_starts.clone().skip(1);
-                let n_bins =
-                    ((region_end - region_start) + self.bin_size as usize) / self.bin_size as usize; // Adjusted to correctly calculate the number of bins when the range is not a perfect multiple of bin_size
 
                 // Iterate over the bins
                 for (start, end) in bin_starts.zip(bin_ends) {
