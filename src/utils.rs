@@ -77,6 +77,50 @@ impl CellBarcodes {
     }
 }
 
+pub struct CellBarcodesMulti {
+    barcodes: Vec<HashSet<String>>,
+}
+
+impl CellBarcodesMulti {
+    pub fn new() -> Self {
+        Self {
+            barcodes: Vec::new(),
+        }
+    }
+
+    pub fn barcodes(&self) -> Vec<HashSet<String>> {
+        self.barcodes.clone()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.barcodes.is_empty()
+    }
+
+    pub fn from_csv(file_path: &PathBuf) -> Result<Self> {
+        let path = Path::new(file_path).to_path_buf();
+
+        let df = CsvReadOptions::default()
+            .with_has_header(true)
+            .try_into_reader_with_file_path(Some(path))?
+            .finish()?;
+
+        let mut barcodes = Vec::new();
+
+        for (i, column) in df.iter().enumerate() {
+            let barcode = column.str().unwrap();
+
+            let bc = barcode
+                .iter()
+                .filter_map(|x| x.map(|x| x.to_string()))
+                .collect::<HashSet<String>>();
+
+            barcodes.push(bc);
+        }
+
+        Ok(Self { barcodes })
+    }
+}
+
 #[derive(Debug)]
 struct ChromosomeStats {
     chrom: String,
