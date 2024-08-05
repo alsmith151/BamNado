@@ -12,7 +12,7 @@ mod filter;
 mod intervals;
 mod spikein;
 mod utils;
-// mod meta;
+mod split;
 
 use crate::utils::FileType;
 
@@ -164,6 +164,19 @@ enum Commands {
         #[arg(short, long)]
         stats: Option<PathBuf>,
     },
+
+    /// Split a BAM file into endogenous and exogenous reads
+    Split{
+        /// Input BAM file
+        #[arg(short, long)]
+        input: PathBuf,
+
+        /// Output prefix
+        #[arg(short, long)]
+        output: PathBuf,
+
+    },
+
 }
 
 fn main() {
@@ -443,7 +456,54 @@ fn main() {
                     exit(1);
                 }
             }
-        }
+        },
+        Some(Commands::Split {
+            input,
+            output,
+        }) => {
+
+
+            let whitelisted_barcodes = match &cli.whitelisted_barcodes {
+                Some(whitelist) => {
+                    let barcodes =
+                        utils::CellBarcodes::from_csv(whitelist).expect("Failed to read barcodes");
+                    Some(barcodes.barcodes())
+                }
+                None => None,
+            };
+
+
+            let filter = filter::BamReadFilter::new(
+                cli.proper_pair,
+                Some(cli.min_mapq),
+                Some(cli.min_length),
+                Some(cli.max_length),
+                None,
+                whitelisted_barcodes,
+            );
+
+
+            let split = split::BamSplitter::new(
+                input.to_path_buf(),
+                output.to_path_buf(),
+                filter,
+            );
+
+            match split.split() {
+                Ok(_) => {
+                    info!("Successfully split BAM file");
+                }
+                Err(e) => {
+                    error!("Error splitting BAM file: {}", e);
+                    exit(1);
+                }
+            }
+        },
+
+
+
+
+
         None => {
             eprintln!("No subcommand provided");
             std::process::exit(1);
