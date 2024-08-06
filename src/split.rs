@@ -4,8 +4,8 @@ use crate::utils::BamStats;
 use anyhow::Result;
 use crossbeam::channel::unbounded;
 use itertools::Itertools;
-use noodles::core::Region;
-use noodles::{bam, bai};
+use noodles::core::{Region, Position};
+use noodles::{bam};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use std::path::PathBuf;
 use log::{info, warn, debug};
@@ -47,45 +47,65 @@ impl BamSplitter {
         writer.write_header(&header).await?;
 
         // Get the chromosome sizes
-        let query_regions = index.reference_senquences().iter().for_each(|r| {
-            let chrom = r.name();
-            let len = r.len();
-            let start = Position::from(1);
-            let end = Position::from(len);
-            let region = Region::new(chrom, start..=end)
-        });
+        let chromsizes = header
+            .reference_sequences()
+            .iter()
+            .map(|(name, seq)|
+             (name.to_string(), seq.length().get() as u64)
+            )
+            .collect::<std::collections::HashMap<_, _>>();
+
+        let query_regions = chromsizes
+            .iter()
+            .map(|(name, size)| {
+                let start = Position::try_from(1).unwrap();
+                let end = Position::try_from(*size as usize).unwrap();
+                Region::new(name.to_string(), start..=end)
+
+            });
 
 
-
-
-        let mut records = reader.record_bufs(&header);
-
-        loop  {
-
-            let record = records.try_next().await;
-
-            // Check if the record is valid i.e. doesn't error
-            let rec = match record {
-                Ok(rec) => rec,
-                Err(e) => {
-                    warn!("Error reading record: {:?}", e);
-                    continue;
+        for region in query_regions {
+            let mut query = reader.query(&header, &index, &region)?;
+            while let Some(record) =  query.try_next().await? {
+                let is_valid = self.filter.is_valid(&record, Some(&header))?;
+                if is_valid {
+                    writer.write_record(&header, &record).await?;
                 }
-            };
 
-            // Check if the record is None
-            let record = match rec {
-                Some(record) => record,
-                None => break,
                 
-            };
-
-            // Check if the record is valid i.e. passes the filter and write it to the output file
-            let is_valid = self.filter.is_valid(&record, Some(&header))?;
-            if is_valid {
-                writer.write_alignment_record(&header, &record).await?;
             }
         }
+
+
+
+
+        // loop  {
+
+        //     let record = records.try_next().await;
+
+        //     // Check if the record is valid i.e. doesn't error
+        //     let rec = match record {
+        //         Ok(rec) => rec,
+        //         Err(e) => {
+        //             warn!("Error reading record: {:?}", e);
+        //             continue;
+        //         }
+        //     };
+
+        //     // Check if the record is None
+        //     let record = match rec {
+        //         Some(record) => record,
+        //         None => break,
+                
+        //     };
+
+        //     // Check if the record is valid i.e. passes the filter and write it to the output file
+        //     let is_valid = self.filter.is_valid(&record, Some(&header))?;
+        //     if is_valid {
+        //         writer.write_alignment_record(&header, &record).await?;
+        //     }
+        // }
 
         Ok(())
     }
