@@ -476,7 +476,10 @@ pub fn regions_to_lapper(regions: Vec<Region>) -> Result<HashMap<String, Lapper<
 /// If the noodles crate fails to read the header, we fall back to samtools
 /// This is a bit of a hack but it works for now
 /// The noodles crate is more strict about the header format than samtools
-pub fn get_bam_header(file_path: PathBuf) -> Result<sam::Header> {
+pub fn get_bam_header<P>(file_path: P) -> Result<sam::Header> where P: AsRef<Path> {
+
+    let file_path = file_path.as_ref();
+    
     // Check that the file exists
     if !file_path.exists() {
         return Err(anyhow::Error::from(std::io::Error::new(
