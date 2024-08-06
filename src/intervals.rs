@@ -55,9 +55,6 @@ impl IntervalMaker<'_> {
     fn coords_fragment(&self) -> Option<(usize, usize, usize)> {
         let is_read_1 = self.read.flags().is_first_segment();
         let is_reverse = self.read.flags().is_reverse_complemented();
-        let is_filtered = self.filter.is_valid(&self.read);
-
-
         let read = &self.read;
 
         if is_read_1 {
@@ -154,8 +151,8 @@ impl IntervalMaker<'_> {
     }
 
     pub fn coords(&self) -> Option<(usize, usize)> {
-        match self.filter.is_valid(&self.read) {
-            true => {
+        match self.filter.is_valid(&self.read, Some(self.header)) {
+            Ok(true) => {
                 let coord = if self.use_fragment {
                     self.coords_fragment()
                 } else if self.shift.iter().any(|&x| x != 0) {
@@ -173,7 +170,7 @@ impl IntervalMaker<'_> {
                     }
                 }
             }
-            false => None,
+            _ => None,
         }
     }
 

@@ -1,9 +1,10 @@
 use ahash::{HashMap, HashSet};
-use noodles::{bam, sam::alignment::record::data::field::Value};
+use anyhow::Result;
+use noodles::sam::alignment::record::data::field::tag::Tag;
+use noodles::{bam, sam, sam::alignment::record::data::field::Value};
 use rust_lapper::Lapper;
 use std::fmt::Display;
 use std::sync::{Arc, Mutex};
-use anyhow::Result;
 
 use crate::utils::CB;
 
@@ -69,7 +70,11 @@ impl Display for BamReadFilter {
 
         match &self.blacklisted_locations {
             Some(blacklisted_locations) => {
-                writeln!(f, "\tNumber of Blacklisted locations: {:?}", blacklisted_locations.len())?;
+                writeln!(
+                    f,
+                    "\tNumber of Blacklisted locations: {:?}",
+                    blacklisted_locations.len()
+                )?;
             }
             None => {
                 writeln!(f, "\tNumber of Blacklisted locations: 0")?;
@@ -78,7 +83,11 @@ impl Display for BamReadFilter {
 
         match &self.whitelisted_barcodes {
             Some(whitelisted_barcodes) => {
-                writeln!(f, "\tNumber of Whitelisted barcodes: {:?}", whitelisted_barcodes.len())?;
+                writeln!(
+                    f,
+                    "\tNumber of Whitelisted barcodes: {:?}",
+                    whitelisted_barcodes.len()
+                )?;
             }
             None => {
                 writeln!(f, "\tNumber of Whitelisted barcodes: 0")?;
@@ -100,7 +109,6 @@ impl Display for BamReadFilterStats {
         Ok(())
     }
 }
-
 
 impl BamReadFilter {
     pub fn new(
@@ -126,26 +134,44 @@ impl BamReadFilter {
         }
     }
 
-    pub fn is_valid(&self, alignment: &bam::Record) -> bool {
+    pub fn is_valid<R>(&self, alignment: &R, header: Option<&sam::Header>) -> Result<bool>
+    where
+        R: sam::alignment::Record,
+    {
         // Update total
         self.stats.lock().unwrap().n_total += 1;
 
+        let flags = match alignment.flags() {
+            Ok(flags) => flags,
+            Err(_) => {
+                self.stats.lock().unwrap().n_failed_proper_pair += 1;
+                return Ok(false);
+            }
+        };
 
         // Filter by proper pair
-        if self.proper_pair && !alignment.flags().is_properly_segmented() {
-            return false;
+        if self.proper_pair && !flags.is_properly_segmented() {
+            return Ok(false);
         }
 
         // Filter by unmapped reads
-        if alignment.flags().is_unmapped() {
+        if flags.is_unmapped() {
             self.stats.lock().unwrap().n_failed_mapq += 1;
-            return false;
+            return Ok(false);
         }
 
+        let mapping_quality = match alignment.mapping_quality() {
+            Some(Ok(mapping_quality)) => mapping_quality,
+            _ => {
+                self.stats.lock().unwrap().n_failed_mapq += 1;
+                return Ok(false);
+            }
+        };
+
         // Filter by mapping quality
-        if alignment.mapping_quality().unwrap().get() < self.min_mapq {
+        if mapping_quality.get() < self.min_mapq {
             self.stats.lock().unwrap().n_failed_mapq += 1;
-            return false;
+            return Ok(false);
         }
 
         // Filter by read length
@@ -155,18 +181,31 @@ impl BamReadFilter {
             || alignment_length > self.max_length as usize
         {
             self.stats.lock().unwrap().n_failed_length += 1;
-            return false;
+            return Ok(false);
         }
 
-        let chrom = alignment
-            .reference_sequence_id()
-            .expect("No reference sequence ID")
-            .expect("Failed to get reference sequence ID");
-        let start = alignment
-            .alignment_start()
-            .expect("No alignment start")
-            .expect("Failed to get alignment start")
-            .get();
+        let header = match header {
+            Some(header) => header,
+            None => {
+                panic!("No header provided");
+            }
+        };
+
+        let chrom = match alignment.reference_sequence_id(header) {
+            Some(Ok(chrom)) => chrom,
+            _ => {
+                self.stats.lock().unwrap().n_failed_mapq += 1;
+                return Ok(false);
+            }
+        };
+
+        let start = match alignment.alignment_start() {
+            Some(Ok(start)) => start.get(),
+            _ => {
+                self.stats.lock().unwrap().n_failed_mapq += 1;
+                return Ok(false);
+            }
+        };
         let end = start + alignment_length;
 
         // Filter by blacklisted locations
@@ -175,7 +214,7 @@ impl BamReadFilter {
                 if let Some(blacklist) = blacklisted_locations.get(&chrom) {
                     if blacklist.count(start, end) > 0 {
                         self.stats.lock().unwrap().n_failed_blacklist += 1;
-                        return false;
+                        return Ok(false);
                     }
                 }
             }
@@ -190,34 +229,35 @@ impl BamReadFilter {
                 Some(barcode) => {
                     if !barcodes.contains(&barcode) {
                         self.stats.lock().unwrap().n_failed_barcode += 1;
-                        return false;
+                        return Ok(false);
                     }
                 }
                 None => {
                     self.stats.lock().unwrap().n_failed_barcode += 1;
-                    return false;
+                    return Ok(false);
                 }
             }
         };
-        true
+        Ok(true)
     }
 
     pub fn stats(&self) -> BamReadFilterStats {
         let stats = self.stats.lock().unwrap();
         *stats
     }
-
-
 }
 
 /// Get the cell barcode from a BAM alignment.
-fn get_cell_barcode(alignment: &bam::Record) -> Option<String> {
+fn get_cell_barcode<R>(alignment: &R) -> Option<String>
+where
+    R: sam::alignment::Record,
+{
     let tags = alignment.data();
-    let cb = tags.get(&CB);
+    let cell_barcode_tag = Tag::from(CB);
+    let cb = tags.get(&cell_barcode_tag);
 
     match cb {
         Some(Ok(Value::String(barcode))) => Some(barcode.to_string()),
         _ => None,
     }
-
 }

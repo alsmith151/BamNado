@@ -16,6 +16,7 @@ use rust_lapper::Lapper;
 use std::io::Write;
 use std::ops::Bound;
 use std::path::{Path, PathBuf};
+use noodles::sam::alignment::record::data::field::tag::Tag;
 
 pub const CB: [u8; 2] = [b'C', b'B'];
 pub type Iv = Interval<usize, u32>;

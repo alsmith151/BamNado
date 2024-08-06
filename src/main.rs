@@ -438,7 +438,56 @@ fn main() {
                     exit(1);
                 }
             }
-        }
+        },
+        Some(Commands::Split {
+            input,
+            output,
+        }) => {
+
+
+            let whitelisted_barcodes = match &cli.whitelisted_barcodes {
+                Some(whitelist) => {
+                    let barcodes =
+                        utils::CellBarcodes::from_csv(whitelist).expect("Failed to read barcodes");
+                    Some(barcodes.barcodes())
+                }
+                None => None,
+            };
+
+
+            let filter = filter::BamReadFilter::new(
+                cli.proper_pair,
+                Some(cli.min_mapq),
+                Some(cli.min_length),
+                Some(cli.max_length),
+                None,
+                whitelisted_barcodes,
+            );
+
+
+            let split = split::BamSplitter::new(
+                input.to_path_buf(),
+                output.to_path_buf(),
+                filter,
+            );
+
+            let rt = tokio::runtime::Builder::new_current_thread()
+                                .enable_all()
+                                .build()
+                                .unwrap();
+
+            
+            let split_future = split.split_async();
+            rt.block_on(split_future).expect("Failed to split BAM file");
+
+
+
+        },
+
+
+
+
+
         None => {
             eprintln!("No subcommand provided");
             std::process::exit(1);
