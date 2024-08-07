@@ -291,8 +291,8 @@ impl BamPileup {
         let mut file =
             std::fs::File::create(outfile).expect("could not create output bedgraph file");
 
-        let mut df = self.pileup_normalised().expect("Error getting pileup");
-        df.sort(["chrom", "start"], Default::default())?;
+        let df = self.pileup_normalised().expect("Error getting pileup");
+        let mut df =  df.sort(["chrom", "start"], Default::default())?;
 
         CsvWriter::new(&mut file)
             .include_header(false)
@@ -469,15 +469,15 @@ fn collapse_equal_bins(df: DataFrame) -> DataFrame {
     let mut end = Vec::new();
     let mut scores = Vec::new();
 
-    let mut prev_score = 0;
+    let mut prev_score = 0.0;
     let mut prev_start = 0;
     let mut prev_end = 0;
     let mut prev_chrom = "";
 
     let chrom_s = df.column("chrom").unwrap().str().unwrap().into_iter();
-    let start_s = df.column("start").unwrap().u32().unwrap().into_iter();
-    let end_s = df.column("end").unwrap().u32().unwrap().into_iter();
-    let score_s = df.column("score").unwrap().u32().unwrap().into_iter();
+    let start_s = df.column("start").unwrap().u64().unwrap().into_iter();
+    let end_s = df.column("end").unwrap().u64().unwrap().into_iter();
+    let score_s = df.column("score").unwrap().f64().unwrap().into_iter();
 
     for (chrom_val, start_val, end_val, score_val) in izip!(chrom_s, start_s, end_s, score_s) {
         let chrom_val = chrom_val.unwrap();
@@ -627,16 +627,16 @@ impl MultiBamPileup {
                 }
 
                 df
+
             })
             .reduce(
                 || DataFrame::empty(),
                 |acc, mut df| {
-                    acc.vstack(&mut df).expect("Error stacking DataFrames");
+                    let acc = acc.vstack(&mut df).expect("Error stacking DataFrames");
                     acc
                 },
             );
 
-        info!("Pileup complete");
         Ok(pileup)
     }
 
@@ -694,8 +694,8 @@ impl MultiBamPileup {
             std::fs::File::create(outfile).expect("could not create output bedgraph file");
 
         let df = self.pileup_aggregated().expect("Error getting pileup");
-        let mut df = collapse_equal_bins(df);
-        df.sort(["chrom", "start"], Default::default())?;
+        let df = collapse_equal_bins(df);
+        let mut df = df.sort(["chrom", "start"], Default::default())?;
 
         CsvWriter::new(&mut file)
             .include_header(false)

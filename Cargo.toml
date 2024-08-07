@@ -14,8 +14,9 @@ colog = "1.3.0"
 indicatif = {version = "*", features = ["rayon"]}
 itertools = "*"
 log = "0.4.22"
-noodles = {version = '0.77.0', features = ['bam', 'bgzf', 'cram', 'sam', 'bed', 'core', 'csi']}
-noodles-bam = {features = ['async'], version = '*'}
+noodles = {version = '0.77.0', features = ['bgzf', 'cram','bed', 'core', 'csi', 'async', 'sam', 'bam']}
+#noodles-bam = {features = ['async'], version = '0.66.0'}
+#noodles-sam = {features = ['async'], version = '0.63.0'}
 polars = {version = "*", features = ['lazy']}
 rayon = "1.10.0"
 rust-lapper = "1.1.0"

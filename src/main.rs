@@ -12,7 +12,7 @@ mod filter;
 mod intervals;
 mod spikein;
 mod utils;
-// mod meta;
+mod split;
 
 use crate::utils::FileType;
 
@@ -163,6 +163,17 @@ enum Commands {
         /// Path for stats output
         #[arg(short, long)]
         stats: Option<PathBuf>,
+    },
+
+    /// Split a BAM file based on cell barcodes
+    Split {
+        /// Input BAM file
+        #[arg(short, long)]
+        input: PathBuf,
+
+        /// Output prefix
+        #[arg(short, long)]
+        output: PathBuf,
     },
 }
 

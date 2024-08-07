@@ -1,7 +1,8 @@
 use ahash::{HashMap, HashSet};
 use anyhow::Result;
+use noodles::sam;
 use noodles::sam::alignment::record::data::field::tag::Tag;
-use noodles::{bam, sam, sam::alignment::record::data::field::Value};
+use noodles::sam::alignment::record::data::field::Value;
 use rust_lapper::Lapper;
 use std::fmt::Display;
 use std::sync::{Arc, Mutex};

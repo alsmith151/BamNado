@@ -3,12 +3,16 @@ use crate::utils::get_bam_header;
 use crate::utils::BamStats;
 use anyhow::Result;
 use crossbeam::channel::unbounded;
-use itertools::Itertools;
-use noodles::core::Region;
-use noodles::{bam, bai};
+use log::{debug, info, warn};
+use indicatif::ProgressBar;
+
+
+use noodles::core::{Position, Region};
+use noodles::{bam, sam};
+use noodles::sam::header::record::value::{map::ReferenceSequence, Map};
+use noodles::bam::{bai, AsyncReader, AsyncWriter};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use std::path::PathBuf;
-use log::{info, warn, debug};
 
 use futures::TryStreamExt;
 use tokio::fs::File;
@@ -32,60 +36,56 @@ impl BamSplitter {
         let filepath = self.filepath.clone();
         let outfile = self.output.clone();
 
-        let mut reader = File::open(&filepath).await.map(bam::AsyncReader::new)?;
+        let mut reader = File::open(&filepath).await.map(AsyncReader::new)?;
         let header = reader.read_header().await;
 
         let header = match header {
             Ok(header) => header,
-            Err(e) => get_bam_header(filepath.clone())?,
-        }; 
+            Err(e) => {
+               get_bam_header(&filepath)?
+            }
+        };
 
-        let index = bam::bai::r#async::read(self.filepath.with_extension("bam.bai")).await?;
+        let index = bai::r#async::read(self.filepath.with_extension("bam.bai")).await?;
 
         // Make writer
-        let mut writer = bam::AsyncWriter::new(File::create(outfile).await?);
+        let mut writer = AsyncWriter::new(File::create(outfile).await?);
         writer.write_header(&header).await?;
 
         // Get the chromosome sizes
-        let query_regions = index.reference_senquences().iter().for_each(|r| {
-            let chrom = r.name();
-            let len = r.len();
-            let start = Position::from(1);
-            let end = Position::from(len);
-            let region = Region::new(chrom, start..=end)
+        let chromsizes = header
+            .reference_sequences()
+            .iter()
+            .map(|(name, seq)| (name.to_string(), seq.length().get() as u64))
+            .collect::<std::collections::HashMap<_, _>>();
+
+        let query_regions = chromsizes.iter().map(|(name, size)| {
+            let start = Position::try_from(1).unwrap();
+            let end = Position::try_from(*size as usize).unwrap();
+            Region::new(name.to_string(), start..=end)
         });
 
 
+        let progress = ProgressBar::new(chromsizes.len() as u64);
 
+        for region in query_regions {
+            progress.inc(1);
 
-        let mut records = reader.record_bufs(&header);
+            // println!("Querying region: {:?}", region);
 
-        loop  {
-
-            let record = records.try_next().await;
-
-            // Check if the record is valid i.e. doesn't error
-            let rec = match record {
-                Ok(rec) => rec,
-                Err(e) => {
-                    warn!("Error reading record: {:?}", e);
-                    continue;
+            let mut query = reader.query(&header, &index, &region)?;
+            while let Some(record) = query.try_next().await? {
+                let is_valid = self.filter.is_valid(&record, Some(&header))?;
+                if is_valid {
+                    writer.write_record(&header, &record).await?;
                 }
-            };
-
-            // Check if the record is None
-            let record = match rec {
-                Some(record) => record,
-                None => break,
-                
-            };
-
-            // Check if the record is valid i.e. passes the filter and write it to the output file
-            let is_valid = self.filter.is_valid(&record, Some(&header))?;
-            if is_valid {
-                writer.write_alignment_record(&header, &record).await?;
             }
         }
+
+        progress.finish();
+        writer.shutdown().await?;
+
+
 
         Ok(())
     }
@@ -151,7 +151,11 @@ impl BamSplitter {
                 let filtered_records = records
                     .into_iter()
                     .filter_map(|r| r.is_ok().then(|| r.unwrap()))
-                    .filter(|record| self.filter.is_valid(record, Some(&header)).unwrap_or_else(|_| false))
+                    .filter(|record| {
+                        self.filter
+                            .is_valid(record, Some(&header))
+                            .unwrap_or_else(|_| false)
+                    })
                     .collect::<Vec<_>>();
 
                 tx.send(filtered_records).expect("Error sending records");
