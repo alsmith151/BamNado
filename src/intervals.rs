@@ -3,9 +3,9 @@ use std::cmp::min;
 use ahash::HashMap;
 use anyhow::Result;
 use noodles::core::Position;
-use noodles::sam::alignment::RecordBuf;
-use noodles::{bam, sam};
 
+use noodles::{bam, sam};
+use noodles::sam::alignment::RecordBuf;
 use crate::filter::BamReadFilter;
 
 pub struct IntervalMaker<'a> {
