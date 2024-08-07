@@ -1,22 +1,18 @@
 use ahash::{HashMap, HashSet};
 use anyhow::Result;
-use bio_types::annot::contig;
 use bio_types::annot::contig::Contig;
-use bio_types::genome::Length;
 use bio_types::strand::ReqStrand;
-use crossbeam::epoch::Pointable;
 use log::{debug, info, warn};
-use noodles::core::region;
+
 use noodles::core::{Position, Region};
-use noodles::csi::binning_index::BinningIndex;
 use noodles::{bam, sam};
+use noodles::sam::alignment::record::data::field::tag::Tag;
 use polars::prelude::*;
 use rust_lapper::Interval;
 use rust_lapper::Lapper;
 use std::io::Write;
 use std::ops::Bound;
 use std::path::{Path, PathBuf};
-use noodles::sam::alignment::record::data::field::tag::Tag;
 
 pub const CB: [u8; 2] = [b'C', b'B'];
 pub type Iv = Interval<usize, u32>;
@@ -476,10 +472,12 @@ pub fn regions_to_lapper(regions: Vec<Region>) -> Result<HashMap<String, Lapper<
 /// If the noodles crate fails to read the header, we fall back to samtools
 /// This is a bit of a hack but it works for now
 /// The noodles crate is more strict about the header format than samtools
-pub fn get_bam_header<P>(file_path: P) -> Result<sam::Header> where P: AsRef<Path> {
-
+pub fn get_bam_header<P>(file_path: P) -> Result<sam::Header>
+where
+    P: AsRef<Path>,
+{
     let file_path = file_path.as_ref();
-    
+
     // Check that the file exists
     if !file_path.exists() {
         return Err(anyhow::Error::from(std::io::Error::new(
@@ -489,7 +487,7 @@ pub fn get_bam_header<P>(file_path: P) -> Result<sam::Header> where P: AsRef<Pat
     };
 
     let mut reader = bam::io::indexed_reader::Builder::default()
-        .build_from_path(file_path.clone())
+        .build_from_path(file_path)
         .expect("Failed to open file");
 
     let header = match reader.read_header() {
@@ -503,7 +501,7 @@ pub fn get_bam_header<P>(file_path: P) -> Result<sam::Header> where P: AsRef<Pat
             let header_samtools = std::process::Command::new("samtools")
                 .arg("view")
                 .arg("-H")
-                .arg(file_path.clone())
+                .arg(file_path)
                 .output()
                 .expect("Failed to run samtools")
                 .stdout;
@@ -519,6 +517,7 @@ pub fn get_bam_header<P>(file_path: P) -> Result<sam::Header> where P: AsRef<Pat
             let header = reader
                 .read_header()
                 .expect("Failed to read header with samtools");
+
             header
         }
     };
