@@ -1,6 +1,4 @@
 use ahash::{HashMap, HashSet, HashSetExt};
-use noodles::sam::header;
-use noodles::{bam, sam};
 use serde::ser::SerializeStruct;
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
@@ -10,8 +8,9 @@ use std::prelude::rust_2021::*;
 use anyhow::Result;
 use crossbeam::channel::unbounded;
 use log::{error, info};
-use noodles::bam::record::Record;
-use noodles::sam::alignment::RecordBuf;
+use noodles::sam::{self as sam, alignment::RecordBuf, header::Header};
+use noodles::bam::{self as bam,  record::Record};
+
 
 #[derive(Debug, Deserialize)]
 pub struct SplitStats {
