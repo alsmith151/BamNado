@@ -1,18 +1,24 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use log::{error, info};
+use meta::Heatmapper;
+use noodles::sam::record::data::field::value::base_modifications::group;
 use std::process::exit;
+use std::str::FromStr;
 use std::{
     io::Write,
     path::{Path, PathBuf},
 };
+use hdf5;
+
 
 mod count;
 mod filter;
 mod intervals;
+mod meta;
 mod spikein;
-mod utils;
 mod split;
+mod utils;
 
 use crate::utils::FileType;
 
@@ -175,6 +181,37 @@ enum Commands {
         #[arg(short, long)]
         output: PathBuf,
     },
+
+    /// Calculate coverage over regions of interest
+    Metaplot {
+        // Input score file
+        #[arg(short, long)]
+        score_file: PathBuf,
+
+        // Input intervals file
+        #[arg(short, long)]
+        intervals: PathBuf,
+
+        // Output file
+        #[arg(short, long)]
+        output: PathBuf,
+
+        // Bin size for coverage calculation
+        #[arg(short = 's', long)]
+        bin_size: Option<u32>,
+
+        // Number of basepairs to extend the intervals upstream
+        #[arg(short, long)]
+        upstream: Option<u32>,
+
+        // Number of basepairs to extend the intervals downstream
+        #[arg(short, long)]
+        downstream: Option<u32>,
+
+        // Reference point
+        #[arg(short, long)]
+        reference_point: meta::RefPoint,
+    },
 }
 
 fn main() {
@@ -288,10 +325,15 @@ fn main() {
                     exit(1);
                 }
             }
-
-        },
-        Some(Commands::MultiBamCoverage { bams, output, bin_size, norm_method, scale_factor, use_fragment }) => {
-            
+        }
+        Some(Commands::MultiBamCoverage {
+            bams,
+            output,
+            bin_size,
+            norm_method,
+            scale_factor,
+            use_fragment,
+        }) => {
             let bam_files: Vec<&Path> = bams.iter().map(|x| x.as_path()).collect();
 
             // Check if all BAM files exist
@@ -313,34 +355,39 @@ fn main() {
 
             let bam_filters: Vec<filter::BamReadFilter> = match &cli.whitelisted_barcodes {
                 Some(whitelist) => {
-                    let barcodes =
-                        utils::CellBarcodesMulti::from_csv(whitelist).expect("Failed to read barcodes");
-                    
-                    bam_files.iter().zip(barcodes.barcodes()).map(|(bam, bc)| {
-                        let filter = filter::BamReadFilter::new(
-                            cli.proper_pair,
-                            Some(cli.min_mapq),
-                            Some(cli.min_length),
-                            Some(cli.max_length),
-                            None,
-                            Some(bc),
-                        );
-                        filter
-                    }).collect()
-                },
-                None => {
-                    bam_files.iter().map(|bam| {
-                        let filter = filter::BamReadFilter::new(
-                            cli.proper_pair,
-                            Some(cli.min_mapq),
-                            Some(cli.min_length),
-                            Some(cli.max_length),
-                            None,
-                            None,
-                        );
-                        filter
-                    }).collect()
+                    let barcodes = utils::CellBarcodesMulti::from_csv(whitelist)
+                        .expect("Failed to read barcodes");
+
+                    bam_files
+                        .iter()
+                        .zip(barcodes.barcodes())
+                        .map(|(bam, bc)| {
+                            let filter = filter::BamReadFilter::new(
+                                cli.proper_pair,
+                                Some(cli.min_mapq),
+                                Some(cli.min_length),
+                                Some(cli.max_length),
+                                None,
+                                Some(bc),
+                            );
+                            filter
+                        })
+                        .collect()
                 }
+                None => bam_files
+                    .iter()
+                    .map(|bam| {
+                        let filter = filter::BamReadFilter::new(
+                            cli.proper_pair,
+                            Some(cli.min_mapq),
+                            Some(cli.min_length),
+                            Some(cli.max_length),
+                            None,
+                            None,
+                        );
+                        filter
+                    })
+                    .collect(),
             };
 
             let coverage = count::MultiBamPileup::new(
@@ -398,7 +445,6 @@ fn main() {
                     exit(1);
                 }
             };
-                    
 
             match result {
                 Ok(_) => {
@@ -409,9 +455,6 @@ fn main() {
                     exit(1);
                 }
             }
-
-
-
         }
         Some(Commands::SplitExogenous {
             input,
@@ -449,13 +492,8 @@ fn main() {
                     exit(1);
                 }
             }
-        },
-        Some(Commands::Split {
-            input,
-            output,
-        }) => {
-
-
+        }
+        Some(Commands::Split { input, output }) => {
             let whitelisted_barcodes = match &cli.whitelisted_barcodes {
                 Some(whitelist) => {
                     let barcodes =
@@ -464,7 +502,6 @@ fn main() {
                 }
                 None => None,
             };
-
 
             let filter = filter::BamReadFilter::new(
                 cli.proper_pair,
@@ -475,29 +512,91 @@ fn main() {
                 whitelisted_barcodes,
             );
 
-
-            let split = split::BamSplitter::new(
-                input.to_path_buf(),
-                output.to_path_buf(),
-                filter,
-            );
+            let split = split::BamSplitter::new(input.to_path_buf(), output.to_path_buf(), filter);
 
             let rt = tokio::runtime::Builder::new_current_thread()
-                                .enable_all()
-                                .build()
-                                .unwrap();
+                .enable_all()
+                .build()
+                .unwrap();
 
-            
             let split_future = split.split_async();
             rt.block_on(split_future).expect("Failed to split BAM file");
+        }
+
+        Some(Commands::Metaplot {
+            score_file,
+            intervals,
+            output,
+            bin_size,
+            upstream,
+            downstream,
+            reference_point,
+        }) => {
+            let heatmap_args = meta::HeatmapperArgs {
+                bin_size: bin_size.unwrap_or(50),
+                upstream: upstream.unwrap_or(0),
+                downstream: downstream.unwrap_or(0),
+                ref_point: reference_point.clone(),
+            };
+
+            let filter = filter::BamReadFilter::new(
+                cli.proper_pair,
+                Some(cli.min_mapq),
+                Some(cli.min_length),
+                Some(cli.max_length),
+                None,
+                None,
+            );
+
+            let metaplotter = match meta::ScoreFileType::from_path(score_file)
+                .expect("Failed to determine score file type")
+            {
+                meta::ScoreFileType::Bam => Heatmapper::from_bam(
+                    score_file.clone(),
+                    intervals.clone(),
+                    heatmap_args,
+                    Some(filter),
+                    None,
+                ).expect("Failed to create Heatmapper"),
+                _ => {
+                    panic!("Score file type not supported for metaplotting")
+                }
+            };
+
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+
+            let metaplot_future = metaplotter.count_intervals_from_bam();
+
+            let result = rt.block_on(metaplot_future).expect("Failed to count intervals");
+
+            let output = output.clone();
+            let outfile = output.with_extension("hdf5");
+
+            let file = hdf5::File::create(outfile).expect("Failed to create HDF5 file");
+            let group = file.create_group(score_file.to_str().unwrap()).expect("Failed to create group");
+            let dataset = group.new_dataset_builder().with_data(&result).create("counts").expect("Failed to create dataset");
+            file.flush().expect("Failed to flush file");
 
 
 
-        },
 
 
 
+  
 
+            
+        
+            
+
+
+
+            
+
+            
+        }
 
         None => {
             eprintln!("No subcommand provided");
