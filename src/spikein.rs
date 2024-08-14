@@ -283,7 +283,14 @@ impl BamSplitter {
             let is_qcfail = record.flags().is_qc_fail();
             let is_duplicate = record.flags().is_duplicate();
             let is_secondary = record.flags().is_secondary();
-            let mapq = record.mapping_quality().unwrap().get();
+            let mapq = match record.mapping_quality() {
+                Some(mapq) => mapq.get(),
+                None => {
+                    error!("No mapping quality for record");
+                    self.stats.n_unmapped_reads += 1;
+                    continue;
+                }
+            };
 
             if is_unmapped {
                 self.stats.n_unmapped_reads += 1;
