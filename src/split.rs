@@ -5,8 +5,6 @@ use anyhow::Result;
 use crossbeam::channel::unbounded;
 use log::{debug, info, warn};
 use indicatif::ProgressBar;
-
-
 use noodles::core::{Position, Region};
 use noodles::{bam, sam};
 use noodles::sam::header::record::value::{map::ReferenceSequence, Map};

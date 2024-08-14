@@ -1,17 +1,28 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
+use crate::filter::BamReadFilter;
+use crate::intervals::IntervalMaker;
+use crate::utils::{get_bam_header, regions_to_lapper, BamStats, Iv};
+
 use ahash::HashMap;
-use anyhow::Result;
-use itertools::izip;
+use anyhow::{Result, Error};
+use futures::TryStreamExt;
+use itertools::{izip, Itertools};
 use ndarray::Array2;
+use noodles::bam::{bai, AsyncReader, AsyncWriter};
+use noodles::core::region::{self, interval};
 use noodles::core::{Position, Region};
 use noodles::cram::record::feature;
+use noodles::sam::alignment::record::cigar::Op;
+use noodles::sam::alignment::record::data::field::value::Array;
 use noodles::{bam, bed};
 use polars::prelude::*;
 use rayon::prelude::*;
-
-use crate::utils::{regions_to_lapper, BamStats, Iv};
+use rust_lapper::Lapper;
+use sprs::linalg::ordering::start;
+use std::ops::Bound;
+use tokio::fs::File;
 
 // Aim: to convert the following python code to rust
 
@@ -914,54 +925,72 @@ use crate::utils::{regions_to_lapper, BamStats, Iv};
 //     inter = np.min(foo[interMask] / groupSizes[interMask])
 //     return (inter - intra) / max(inter, intra)
 
-enum RefPoint {
+#[derive(Debug, Clone)]
+pub enum RefPoint {
     TSS,
     TES,
     Center,
 }
 
+impl FromStr for RefPoint {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "TSS" => Ok(Self::TSS),
+            "TES" => Ok(Self::TES),
+            "Center" => Ok(Self::Center),
+            _ => Err(format!("Invalid reference point: {}", s)),
+        }
+    }
+}
+
+
+
+#[derive(Debug, Clone)]
 enum BinAvgType {
     Mean,
     Median,
     Max,
 }
 
-struct HeatmapperArgs {
+#[derive(Debug, Clone)]
+pub struct HeatmapperArgs {
     // The bin size to use for the heatmap
-    bin_size: u32,
+    pub bin_size: u32,
     // The number of bins to use upstream of the region
-    upstream: u32,
+    pub upstream: u32,
     // The number of bins to use downstream of the region
-    downstream: u32,
-    // The number of bins to use in the body of the region
-    body: u32,
-    // The number of bins to use in the unscaled 5 prime region
-    unscaled_5_prime: u32,
-    // The number of bins to use in the unscaled 3 prime region
-    unscaled_3_prime: u32,
-    // The type of average to use when computing the bin values
-    bin_avg_type: BinAvgType,
-    // Whether to treat missing data as zero
-    missing_data_as_zero: bool,
-    // The minimum threshold for a bin value
-    min_threshold: f32,
-    // The maximum threshold for a bin value
-    max_threshold: f32,
-    // The scale to apply to the bin values
-    scale: f32,
+    pub downstream: u32,
     // The reference point to use when computing the heatmap
-    ref_point: RefPoint,
-    // Whether to treat NaN values after the end of the region as zero
-    nan_after_end: bool,
-    // Whether to print debug information
-    debug: bool,
-    // Whether to print verbose information
-    verbose: bool,
-    // Whether to print quiet information
-    quiet: bool,
+    pub ref_point: RefPoint,
+    // // The number of bins to use in the body of the region
+    // body: u32,
+    // // The number of bins to use in the unscaled 5 prime region
+    // unscaled_5_prime: u32,
+    // // The number of bins to use in the unscaled 3 prime region
+    // unscaled_3_prime: u32,
+    // // The type of average to use when computing the bin values
+    // bin_avg_type: BinAvgType,
+    // // Whether to treat missing data as zero
+    // missing_data_as_zero: bool,
+    // // The minimum threshold for a bin value
+    // min_threshold: f32,
+    // // The maximum threshold for a bin value
+    // max_threshold: f32,
+    // // The scale to apply to the bin values
+    // scale: f32,
+    // // Whether to treat NaN values after the end of the region as zero
+    // nan_after_end: bool,
+    // // Whether to print debug information
+    // debug: bool,
+    // // Whether to print verbose information
+    // verbose: bool,
+    // // Whether to print quiet information
+    // quiet: bool,
 }
 
-enum ScoreFileType {
+pub enum ScoreFileType {
     BigWig,
     Bam,
 }
@@ -976,32 +1005,120 @@ impl FromStr for ScoreFileType {
             _ => Err(format!("Invalid score file type: {}", s)),
         }
     }
+    
 }
 
-struct Heatmapper {
+
+impl ScoreFileType {
+    pub fn from_path<P>(path: P) -> Result<Self> where P: AsRef<Path> {
+
+        let path = path.as_ref();
+
+        let extension = path.extension().unwrap().to_str().unwrap();
+        match extension {
+            "bigwig" => Ok(Self::BigWig),
+            "bam" => Ok(Self::Bam),
+            "bw" => Ok(Self::BigWig),
+            _ => panic!("Invalid score file type: {}", extension),
+        }
+    }
+
+
+}
+
+pub struct IntervalOptions {
+    use_fragment: bool,
+    shift: Option<[usize; 4]>,
+}
+
+impl IntervalOptions {
+    pub fn new(use_fragment: bool, shift: Option<[usize; 4]>) -> Self {
+        Self {
+            use_fragment,
+            shift,
+        }
+    }
+
+    pub fn default() -> Self {
+        Self::new(false, None)
+    }
+}
+
+pub struct Heatmapper {
     score_file: PathBuf,
     score_file_type: ScoreFileType,
     args: HeatmapperArgs,
     regions: Vec<Region>,
     n_regions: usize,
     n_bins: usize,
+    filter: Option<BamReadFilter>,
+    interval_options: Option<IntervalOptions>,
 }
 
 impl Heatmapper {
-    fn new(score_file: PathBuf, args: HeatmapperArgs, regions: Vec<Region>) -> Self {
+    pub fn new(
+        score_file: PathBuf,
+        args: HeatmapperArgs,
+        regions: Vec<Region>,
+        filter: Option<BamReadFilter>,
+        interval_options: Option<IntervalOptions>,
+    ) -> Self {
         let n_regions = regions.len();
-        let n_bins = ((args.upstream + args.downstream + args.body) / args.bin_size) as usize;
+        let n_bins = ((args.upstream + args.downstream) / args.bin_size) as usize;
+
+        let regions = regions.iter().map(|r| {
+            let start = match r.start() {
+                Bound::Included(start) => start.get(),
+                _ => panic!("Invalid region start"),
+            };
+
+            let end = match r.end() {
+                Bound::Included(end) => end.get(),
+                _ => panic!("Invalid region end"),
+            };
+
+            let region_start = match args.ref_point {
+                RefPoint::TSS => start - args.upstream as usize,
+                RefPoint::TES => end - args.downstream as usize,
+                RefPoint::Center => ((start + end) / 2) - args.upstream as usize,
+            };
+
+            let region_end = match args.ref_point {
+                RefPoint::TSS => start + args.downstream as usize,
+                RefPoint::TES => end + args.upstream as usize,
+                RefPoint::Center => ((start + end) / 2) + args.upstream as usize,
+            };
+
+            let region_start = Position::try_from(region_start).expect("Invalid region start");
+            let region_end = Position::try_from(region_end).expect("Invalid region end");
+            Region::new(r.name().clone(), region_start..=region_end)
+        }).collect_vec();
+
+        let score_file_type =
+            ScoreFileType::from_str(score_file.extension().unwrap().to_str().unwrap()).unwrap();
+
+        let filter = match score_file_type {
+            ScoreFileType::Bam => match filter {
+                Some(f) => Some(f),
+                None => Some(BamReadFilter::default()),
+            },
+            _ => None,
+        };
+
+        let interval_options = match interval_options {
+            Some(io) => Some(io),
+            None => Some(IntervalOptions::default()),
+        };
 
         Self {
-            score_file: score_file.clone(),
-            score_file_type: ScoreFileType::from_str(
-                score_file.extension().unwrap().to_str().unwrap(),
-            )
-            .unwrap(),
+            score_file,
+            score_file_type,
             args,
             regions,
             n_regions,
             n_bins,
+            filter,
+            interval_options,
         }
     }
 
@@ -1023,161 +1140,101 @@ impl Heatmapper {
         Ok(regions)
     }
 
-    pub fn from_bam(bam: PathBuf, bed: PathBuf, args: HeatmapperArgs) -> Result<Self> {
+    pub fn from_bam(
+        bam: PathBuf,
+        bed: PathBuf,
+        args: HeatmapperArgs,
+        filter: Option<BamReadFilter>,
+        interval_options: Option<IntervalOptions>,
+    ) -> Result<Self> {
         // Construct the regions from the BED file
         let regions = Self::read_bed(bed)?;
-        let heatmapper = Self::new(bam, args, regions);
+        let heatmapper = Self::new(bam, args, regions, filter, interval_options);
         Ok(heatmapper)
     }
 
     pub fn from_bigwig(bigwig: PathBuf, bed: PathBuf, args: HeatmapperArgs) -> Result<Self> {
         // Construct the regions from the BED file
         let regions = Self::read_bed(bed)?;
-        let heatmapper = Self::new(bigwig, args, regions);
+        let heatmapper = Self::new(bigwig, args, regions, None, None);
         Ok(heatmapper)
     }
 
-    pub fn submatrix_from_bam(&mut self) -> Result<()> {
-        let bam = bam::io::indexed_reader::Builder::default().build_from_path(&self.score_file)?;
+    pub async fn count_intervals_from_bam(&self) -> Result<Array2<f32>> {
+        // Load the BAM file
+        let mut reader = File::open(&self.score_file).await.map(AsyncReader::new)?;
+        let header = reader.read_header().await;
+        let header = match header {
+            Ok(header) => header,
+            Err(e) => get_bam_header(&self.score_file)?,
+        };
+        let index = bai::r#async::read(&self.score_file.with_extension("bam.bai")).await?;
 
-        // Determine the chunks over which to iterate
-        let bam_stats = BamStats::new(self.score_file.clone())?;
-        let genomic_chunks = bam_stats.genome_chunks(self.args.bin_size as u64)?;
+        // Get the chromosome sizes
+        let chromsizes = BamStats::new(self.score_file.clone())?
+            .chromsizes_ref_id()
+            .unwrap();
 
-        // Determine which chunks contain the features of interest
-        let genomic_chunk_lapper = regions_to_lapper(genomic_chunks)?;
-        let feature_lapper = regions_to_lapper(self.regions.clone())?;
+        // Get the interval options and filter
+        let interval_options = self.interval_options.as_ref().unwrap();
+        let filter = self.filter.as_ref().unwrap().clone();
 
-        let genomic_intervals = genomic_chunk_lapper
-            .keys()
-            .into_iter()
-            .map(|chromosome| {
-                if feature_lapper.contains_key(chromosome) {
-                    let feature_intervals = feature_lapper.get(chromosome).unwrap();
-                    let genomic_intervals = genomic_chunk_lapper.get(chromosome).unwrap();
+        // Create the matrix to store the counts
+        let mut matrix = Array2::<f32>::zeros((self.n_regions, self.n_bins));
 
-                    // Filter out the genomic intervals that don't contain any features
-                    let genomic_intervals_filtered: Vec<Region> = genomic_intervals
-                        .intervals
-                        .iter()
-                        .filter(|iv| feature_intervals.count(iv.start, iv.stop) > 0)
-                        .map(|iv| {
-                            let start = Position::try_from(iv.start).unwrap();
-                            let stop = Position::try_from(iv.stop).unwrap();
-                            Region::new(chromosome.clone(), start..=stop)
-                        })
-                        .collect();
-                    Some((chromosome.clone(), genomic_intervals_filtered))
-                } else {
-                    None
+        // Iterate over the regions
+        for (region_index, region) in self.regions.iter().enumerate() {
+            // Create a query for the region
+            let mut query = reader.query(&header, &index, region)?;
+
+            // Process the records in the queried region
+            let mut records_in_region = Vec::new();
+            while let Some(record) = query.try_next().await? {
+                let is_valid = filter.is_valid(&record, Some(&header))?;
+                if is_valid {
+                    let interval = IntervalMaker::new(
+                        record,
+                        &header,
+                        &chromsizes,
+                        &filter,
+                        interval_options.use_fragment,
+                        interval_options.shift,
+                    );
+
+                    if let Some(coords) = interval.coords() {
+                        records_in_region.push(Iv {
+                            start: coords.0,
+                            stop: coords.1,
+                            val: 1,
+                        });
+                    }
                 }
-            })
-            .filter(|x| x.is_some())
-            .map(|x| x.unwrap())
-            .collect::<HashMap<String, Vec<Region>>>();
+            }
 
-        // Iterate over the genomic intervals and fetch the reads
-        genomic_intervals
-            .into_par_iter()
-            .map(|(chromosome, regions)| {
-                let mut reader = bam::io::indexed_reader::Builder::default()
-                    .build_from_path(self.score_file.clone())
-                    .expect("Error opening BAM file");
-                let header = reader.read_header().expect("Error reading BAM header");
+            // Create a lapper from the reads
+            let read_lapper = Lapper::new(records_in_region);
 
-                let records = reader
-                    .query(&header, &regions)
-                    .expect("Error querying BAM file");
+            // Create the bins for the region
+            let region_start = match region.start() {
+                Bound::Included(start) => start.get(),
+                _ => panic!("Invalid region start"),
+            };
 
-                let intervals = records
-                    .into_iter()
-                    .filter(|r| r.is_ok())
-                    .map(|r| r.unwrap())
-                    .map(|r| {
-                        IntervalMaker::new(
-                            r,
-                            &header,
-                            &chromsizes_refid,
-                            &self.filter,
-                            self.use_fragment,
-                            None,
-                        )
-                    })
-                    .map(|i| i.coords())
-                    .filter(|c| c.is_some())
-                    .map(|c| c.unwrap())
-                    .map(|i| Iv {
-                        start: i.0,
-                        stop: i.1,
-                        val: 1,
-                    })
-                    .collect::<Vec<Iv>>();
+            let region_end = match region.end() {
+                Bound::Included(end) => end.get(),
+                _ => panic!("Invalid region end"),
+            };
 
-                let
+            let starts = (region_start..region_end).step_by(self.args.bin_size as usize);
+            let ends = starts.clone().skip(1).chain(std::iter::once(region_end));
 
-            });
+            // Iterate over the bins in the region
+            for (bin_index, (start, end)) in starts.zip(ends).enumerate() {
+                let count = read_lapper.count(start, end);
+                matrix[[region_index, bin_index]] = count as f32;
+            }
+        }
 
-        Ok(())
+        Ok(matrix)
     }
-
-    // let pileup = genomic_chunks
-    //     .into_par_iter()
-    //     .progress_with(progress_bar(
-    //         n_total_chunks as u64,
-    //         "Performing pileup".to_string(),
-    //     ))
-    //     .map(|region| {
-    //         // Open the BAM file
-    //         let mut reader = bam::io::indexed_reader::Builder::default()
-    //             .build_from_path(self.file_path.clone())
-    //             .expect("Error opening BAM file");
-    //         // Extract the header
-    //         let header = reader.read_header().expect("Error reading BAM header");
-
-    //         // Fetch the reads in the region
-    //         let records = reader
-    //             .query(&header, &region)
-    //             .expect("Error querying BAM file");
-
-    //         // Make intervals from the reads in the region
-    //         let intervals = records
-    //             .into_iter()
-    //             .filter(|r| r.is_ok())
-    //             .map(|r| r.unwrap())
-    //             .map(|r| {
-    //                 IntervalMaker::new(
-    //                     r,
-    //                     &header,
-    //                     &chromsizes_refid,
-    //                     &self.filter,
-    //                     self.use_fragment,
-    //                     None,
-    //                 )
-    //             })
-    //             .map(|i| i.coords())
-    //             .filter(|c| c.is_some())
-    //             .map(|c| c.unwrap())
-    //             .map(|i| Iv {
-    //                 start: i.0,
-    //                 stop: i.1,
-    //                 val: 1,
-    //             })
-    //             .collect::<Vec<Iv>>();
-
-    //         // Create a lapper from the reads
-    //         let mut read_lapper = Lapper::new(intervals);
-
-    //         // Iterate over bins within the given region and count the reads using the lapper
-    //         let mut bin_counts: Vec<Iv> = Vec::new();
-
-    //         // Generate the bins for the region (bin_size)
-    //         let region_interval = region.interval();
-    //         let region_start = region_interval
-    //             .start()
-    //             .expect("Error getting interval start")
-    //             .get();
-    //         let region_end = region_interval
-    //             .end()
-    //             .expect("Error getting interval end")
-    //             .get();
 }
