@@ -8,7 +8,6 @@ use log::{error, info, warn};
 use noodles::core::region::Region;
 use noodles::core::Position;
 use noodles::{bam, bed, core, sam};
-use polars::frame::NullStrategy;
 use polars::lazy::dsl::cols;
 use polars::lazy::dsl::mean_horizontal;
 use polars::lazy::dsl::sum_horizontal;
@@ -262,17 +261,18 @@ impl BamPileup {
             );
 
         Ok(DataFrame::new(vec![
-            Series::new("chrom", chrom),
-            Series::new("start", start),
-            Series::new("end", end),
-            Series::new("score", score),
+            Column::new("chrom".into(), chrom),
+            Column::new("start".into(), start),
+            Column::new("end".into(), end),
+            Column::new("score".into(), score),
         ])?)
     }
 
     fn pileup_normalised(&self) -> Result<DataFrame> {
         let mut df = self.pileup_to_polars().expect("Error getting pileup");
-        let n_total_counts = df.column("score")?.sum::<u32>().unwrap() as u64;
-        info!("Total counts: {}", n_total_counts);
+        let n_total_counts = df.column("score")?.sum_reduce()?.as_any_value().try_extract()?;
+
+        info!("Total counts: {}", &n_total_counts);
 
         // Take care of the normalization - this will only work for CPM correctly at the moment
         let norm_factor =
@@ -509,10 +509,10 @@ fn collapse_equal_bins(df: DataFrame) -> DataFrame {
 
     // Create a DataFrame from the coordinates
     let new_df = DataFrame::new(vec![
-        Series::new("chrom", chrom),
-        Series::new("start", start),
-        Series::new("end", end),
-        Series::new("score", scores),
+        Column::new("chrom".into(), chrom),
+        Column::new("start".into(), start),
+        Column::new("end".into(), end),
+        Column::new("score".into(), scores),
     ])
     .expect("Error creating DataFrame");
 
@@ -613,16 +613,16 @@ impl MultiBamPileup {
 
                 // Create a DataFrame from the coordinates
                 let mut df = DataFrame::new(vec![
-                    Series::new("chrom", chrom),
-                    Series::new("start", start),
-                    Series::new("end", end),
+                    Column::new("chrom".into(), chrom),
+                    Column::new("start".into(), start),
+                    Column::new("end".into(), end),
                 ])
                 .expect("Error creating DataFrame");
 
                 // Add the scores to the DataFrame
                 for (i, score) in scores.iter().enumerate() {
                     let col_name = format!("score_{}", i);
-                    df.with_column(Series::new(&col_name, score.clone()))
+                    df.with_column(Column::new(col_name.into(), score.clone()))
                         .expect("Error adding column to DataFrame");
                 }
 
@@ -648,7 +648,7 @@ impl MultiBamPileup {
 
         // For each score column, normalise the counts
         for col in score_cols {
-            let n_total_counts = df.column(&col)?.sum::<u32>().unwrap() as u64;
+            let n_total_counts = df.column(&col)?.sum_reduce()?.as_any_value().try_extract()?;
             let norm_factor =
                 self.norm_method
                     .scale_factor(self.scale_factor, self.bin_size, n_total_counts);
@@ -671,11 +671,11 @@ impl MultiBamPileup {
         let df = match self.aggregation_method {
             AggregationMethod::Sum => df
                 .lazy()
-                .with_columns([sum_horizontal(&[cols(&score_cols)])?.alias("score")])
+                .with_columns([sum_horizontal(&[cols(&score_cols)], true)?.alias("score")])
                 .collect()?,
             AggregationMethod::Mean => df
                 .lazy()
-                .with_columns([mean_horizontal(&[cols(&score_cols)])?.alias("score")])
+                .with_columns([mean_horizontal(&[cols(&score_cols)], true)?.alias("score")])
                 .collect()?,
             _ => {
                 error!("Aggregation method not implemented");
