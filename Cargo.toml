@@ -6,7 +6,7 @@ edition = "2021"
 [dependencies]
 ahash = "0.8.11"
 anyhow = "1.0.86"
-bigtools = "0.4.3"
+bigtools = "0.5.5"
 bio = "2.0.0"
 bio-types = "1.0.1"
 clap = {version = "4.5.8", features = ["derive"]}
@@ -14,7 +14,7 @@ colog = "1.3.0"
 indicatif = {version = "*", features = ["rayon"]}
 itertools = "*"
 log = "0.4.22"
-noodles = {version = '0.77.0', features = ['bgzf', 'cram','bed', 'core', 'csi', 'async', 'sam', 'bam']}
+noodles = {version = '0.93.0', features = ['bgzf', 'cram','bed', 'core', 'csi', 'async', 'sam', 'bam']}
 #noodles-bam = {features = ['async'], version = '0.66.0'}
 #noodles-sam = {features = ['async'], version = '0.63.0'}
 polars = {version = "*", features = ['lazy']}
@@ -25,7 +25,7 @@ serde ={ version = "*", features = ["derive"]}
 crossbeam = "*"
 serde_json = "*"
 sprs = "0.11.1"
-ndarray = "0.15.0"
+ndarray = "0.16.1"
 pyo3 = { version = "*", features = ["extension-module"] }
 anstyle = "1.0.8"
 futures = "*"
