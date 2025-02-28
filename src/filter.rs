@@ -41,7 +41,7 @@ impl BamReadFilterStats {
 /// A filter for BAM reads.
 /// Set the minimum mapping quality, minimum and maximum read length, blacklisted locations, and whitelisted barcodes.
 /// The filter is applied to each read in the BAM file.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct BamReadFilter {
     // Filter parameters
 
@@ -131,6 +131,18 @@ impl BamReadFilter {
             max_length,
             blacklisted_locations,
             whitelisted_barcodes,
+            stats: Arc::new(Mutex::new(BamReadFilterStats::new())),
+        }
+    }
+
+    pub fn default() -> Self {
+        Self {
+            proper_pair: false,
+            min_mapq: 0,
+            min_length: 0,
+            max_length: 2000,
+            blacklisted_locations: None,
+            whitelisted_barcodes: None,
             stats: Arc::new(Mutex::new(BamReadFilterStats::new())),
         }
     }
