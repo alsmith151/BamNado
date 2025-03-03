@@ -95,14 +95,6 @@ impl BamPileup {
         let n_total_chunks = genomic_chunks.len();
 
         // Log important information
-        // info!("Pileup settings:");
-        // info!("BAM file: {}", self.file_path.display());
-        // info!("Bin size: {}", self.bin_size);
-        // info!("Performing pileup over {} genomic chunks", n_total_chunks);
-        // info!("Normalizing using method: {:?}", self.norm_method);
-        // info!("Scaling factor: {}", self.scale_factor);
-        // info!("Using fragment for counting: {}", self.use_fragment);
-        // info!("Filtering using: {}", self.filter);
         info!("{}", self.to_string());
 
         let pileup = genomic_chunks
