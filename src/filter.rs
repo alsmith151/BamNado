@@ -5,36 +5,71 @@ use noodles::sam::alignment::record::data::field::tag::Tag;
 use noodles::sam::alignment::record::data::field::Value;
 use rust_lapper::Lapper;
 use std::fmt::Display;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::utils::CB;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Debug)]
 pub struct BamReadFilterStats {
     // Total number of reads
-    n_total: u64,
+    n_total: AtomicU64,
     // Number of reads filtered by proper pair
-    n_failed_proper_pair: u64,
+    n_failed_proper_pair: AtomicU64,
     // Number of reads filtered by mapping quality
-    n_failed_mapq: u64,
+    n_failed_mapq: AtomicU64,
     // Number of reads filtered by length
-    n_failed_length: u64,
+    n_failed_length: AtomicU64,
     // Number of reads filtered by blacklisted locations
-    n_failed_blacklist: u64,
+    n_failed_blacklist: AtomicU64,
     // Number of reads filtered by barcode
-    n_failed_barcode: u64,
+    n_failed_barcode: AtomicU64,
 }
 
 impl BamReadFilterStats {
     pub fn new() -> Self {
         Self {
-            n_total: 0,
-            n_failed_proper_pair: 0,
-            n_failed_mapq: 0,
-            n_failed_length: 0,
-            n_failed_blacklist: 0,
-            n_failed_barcode: 0,
+            n_total: AtomicU64::new(0),
+            n_failed_proper_pair: AtomicU64::new(0),
+            n_failed_mapq: AtomicU64::new(0),
+            n_failed_length: AtomicU64::new(0),
+            n_failed_blacklist: AtomicU64::new(0),
+            n_failed_barcode: AtomicU64::new(0),
         }
+    }
+
+    pub fn snapshot(&self) -> BamReadFilterStatsSnapshot {
+        BamReadFilterStatsSnapshot {
+            n_total: self.n_total.load(Ordering::Relaxed),
+            n_failed_proper_pair: self.n_failed_proper_pair.load(Ordering::Relaxed),
+            n_failed_mapq: self.n_failed_mapq.load(Ordering::Relaxed),
+            n_failed_length: self.n_failed_length.load(Ordering::Relaxed),
+            n_failed_blacklist: self.n_failed_blacklist.load(Ordering::Relaxed),
+            n_failed_barcode: self.n_failed_barcode.load(Ordering::Relaxed),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct BamReadFilterStatsSnapshot {
+    n_total: u64,
+    n_failed_proper_pair: u64,
+    n_failed_mapq: u64,
+    n_failed_length: u64,
+    n_failed_blacklist: u64,
+    n_failed_barcode: u64,
+}
+
+impl Display for BamReadFilterStatsSnapshot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "")?;
+        writeln!(f, "Total reads: {}", self.n_total)?;
+        writeln!(f, "Failed proper pair: {}", self.n_failed_proper_pair)?;
+        writeln!(f, "Failed mapping quality: {}", self.n_failed_mapq)?;
+        writeln!(f, "Failed length: {}", self.n_failed_length)?;
+        writeln!(f, "Failed blacklist: {}", self.n_failed_blacklist)?;
+        writeln!(f, "Failed barcode: {}", self.n_failed_barcode)?;
+        Ok(())
     }
 }
 
@@ -43,8 +78,6 @@ impl BamReadFilterStats {
 /// The filter is applied to each read in the BAM file.
 #[derive(Debug)]
 pub struct BamReadFilter {
-    // Filter parameters
-
     // Properly paired reads only
     proper_pair: bool,
     // Minimum mapping quality
@@ -58,8 +91,7 @@ pub struct BamReadFilter {
     // Whitelisted barcodes (cell barcodes to keep)
     whitelisted_barcodes: Option<HashSet<String>>,
     // Statistics for the filtering process
-    // Arc<Mutex<>> is used to allow multiple threads to access the stats
-    stats: Arc<Mutex<BamReadFilterStats>>,
+    stats: Arc<BamReadFilterStats>,
 }
 
 impl Display for BamReadFilter {
@@ -73,7 +105,7 @@ impl Display for BamReadFilter {
             Some(blacklisted_locations) => {
                 writeln!(
                     f,
-                    "\tNumber of Blacklisted locations: {:?}",
+                    "\tNumber of Blacklisted locations: {}",
                     blacklisted_locations.len()
                 )?;
             }
@@ -86,7 +118,7 @@ impl Display for BamReadFilter {
             Some(whitelisted_barcodes) => {
                 writeln!(
                     f,
-                    "\tNumber of Whitelisted barcodes: {:?}",
+                    "\tNumber of Whitelisted barcodes: {}",
                     whitelisted_barcodes.len()
                 )?;
             }
@@ -94,19 +126,6 @@ impl Display for BamReadFilter {
                 writeln!(f, "\tNumber of Whitelisted barcodes: 0")?;
             }
         }
-        Ok(())
-    }
-}
-
-impl Display for BamReadFilterStats {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "")?;
-        writeln!(f, "Total reads: {}", self.n_total)?;
-        writeln!(f, "Failed proper pair: {}", self.n_failed_proper_pair)?;
-        writeln!(f, "Failed mapping quality: {}", self.n_failed_mapq)?;
-        writeln!(f, "Failed length: {}", self.n_failed_length)?;
-        writeln!(f, "Failed blacklist: {}", self.n_failed_blacklist)?;
-        writeln!(f, "Failed barcode: {}", self.n_failed_barcode)?;
         Ok(())
     }
 }
@@ -131,7 +150,7 @@ impl BamReadFilter {
             max_length,
             blacklisted_locations,
             whitelisted_barcodes,
-            stats: Arc::new(Mutex::new(BamReadFilterStats::new())),
+            stats: Arc::new(BamReadFilterStats::new()),
         }
     }
 
@@ -139,63 +158,57 @@ impl BamReadFilter {
     where
         R: sam::alignment::Record,
     {
-        // Update total
-        self.stats.lock().unwrap().n_total += 1;
+        // Update total count.
+        self.stats.n_total.fetch_add(1, Ordering::Relaxed);
 
         let flags = match alignment.flags() {
             Ok(flags) => flags,
             Err(_) => {
-                self.stats.lock().unwrap().n_failed_proper_pair += 1;
+                self.stats.n_failed_proper_pair.fetch_add(1, Ordering::Relaxed);
                 return Ok(false);
             }
         };
 
-        // Filter by proper pair
+        // Filter by proper pair.
         if self.proper_pair && !flags.is_properly_segmented() {
             return Ok(false);
         }
 
-        // Filter by unmapped reads
+        // Filter by unmapped reads.
         if flags.is_unmapped() {
-            self.stats.lock().unwrap().n_failed_mapq += 1;
+            self.stats.n_failed_mapq.fetch_add(1, Ordering::Relaxed);
             return Ok(false);
         }
 
         let mapping_quality = match alignment.mapping_quality() {
             Some(Ok(mapping_quality)) => mapping_quality,
             _ => {
-                self.stats.lock().unwrap().n_failed_mapq += 1;
+                self.stats.n_failed_mapq.fetch_add(1, Ordering::Relaxed);
                 return Ok(false);
             }
         };
 
-        // Filter by mapping quality
+        // Filter by mapping quality.
         if mapping_quality.get() < self.min_mapq {
-            self.stats.lock().unwrap().n_failed_mapq += 1;
+            self.stats.n_failed_mapq.fetch_add(1, Ordering::Relaxed);
             return Ok(false);
         }
 
-        // Filter by read length
+        // Filter by read length.
         let alignment_length = alignment.sequence().len();
-
         if alignment_length < self.min_length as usize
             || alignment_length > self.max_length as usize
         {
-            self.stats.lock().unwrap().n_failed_length += 1;
+            self.stats.n_failed_length.fetch_add(1, Ordering::Relaxed);
             return Ok(false);
         }
 
-        let header = match header {
-            Some(header) => header,
-            None => {
-                panic!("No header provided");
-            }
-        };
+        let header = header.expect("No header provided");
 
         let chrom = match alignment.reference_sequence_id(header) {
             Some(Ok(chrom)) => chrom,
             _ => {
-                self.stats.lock().unwrap().n_failed_mapq += 1;
+                self.stats.n_failed_mapq.fetch_add(1, Ordering::Relaxed);
                 return Ok(false);
             }
         };
@@ -203,48 +216,43 @@ impl BamReadFilter {
         let start = match alignment.alignment_start() {
             Some(Ok(start)) => start.get(),
             _ => {
-                self.stats.lock().unwrap().n_failed_mapq += 1;
+                self.stats.n_failed_mapq.fetch_add(1, Ordering::Relaxed);
                 return Ok(false);
             }
         };
         let end = start + alignment_length;
 
-        // Filter by blacklisted locations
-        match &self.blacklisted_locations {
-            Some(blacklisted_locations) => {
-                if let Some(blacklist) = blacklisted_locations.get(&chrom) {
-                    if blacklist.count(start, end) > 0 {
-                        self.stats.lock().unwrap().n_failed_blacklist += 1;
-                        return Ok(false);
-                    }
+        // Filter by blacklisted locations.
+        if let Some(blacklisted_locations) = &self.blacklisted_locations {
+            if let Some(blacklist) = blacklisted_locations.get(&chrom) {
+                if blacklist.count(start, end) > 0 {
+                    self.stats.n_failed_blacklist.fetch_add(1, Ordering::Relaxed);
+                    return Ok(false);
                 }
             }
-            None => {}
         }
 
-        // Filter by blacklisted barcodes
+        // Filter by whitelisted barcodes.
         if let Some(barcodes) = &self.whitelisted_barcodes {
             let barcode = get_cell_barcode(alignment);
-
             match barcode {
                 Some(barcode) => {
                     if !barcodes.contains(&barcode) {
-                        self.stats.lock().unwrap().n_failed_barcode += 1;
+                        self.stats.n_failed_barcode.fetch_add(1, Ordering::Relaxed);
                         return Ok(false);
                     }
                 }
                 None => {
-                    self.stats.lock().unwrap().n_failed_barcode += 1;
+                    self.stats.n_failed_barcode.fetch_add(1, Ordering::Relaxed);
                     return Ok(false);
                 }
             }
-        };
+        }
         Ok(true)
     }
 
-    pub fn stats(&self) -> BamReadFilterStats {
-        let stats = self.stats.lock().unwrap();
-        *stats
+    pub fn stats(&self) -> BamReadFilterStatsSnapshot {
+        self.stats.snapshot()
     }
 }
 
@@ -255,10 +263,10 @@ where
 {
     let tags = alignment.data();
     let cell_barcode_tag = Tag::from(CB);
-    let cb = tags.get(&cell_barcode_tag);
-
-    match cb {
-        Some(Ok(Value::String(barcode))) => Some(barcode.to_string()),
-        _ => None,
+    let tag_value = tags.get(&cell_barcode_tag);
+    if let Some(Ok(Value::String(barcode))) = tag_value {
+        Some(barcode.to_string())
+    } else {
+        None
     }
 }
