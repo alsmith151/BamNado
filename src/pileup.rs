@@ -172,6 +172,8 @@ impl BamPileup {
         info!("{}", self);
         info!("Processing {} genomic chunks", n_total_chunks);
 
+        let header = get_bam_header(self.file_path.clone())?;
+
         // Process each genomic chunk in parallel.
         let pileup = genomic_chunks
             .into_par_iter()
@@ -184,7 +186,6 @@ impl BamPileup {
                 let mut reader = bam::io::indexed_reader::Builder::default()
                     .build_from_path(self.file_path.clone())
                     .context("Failed to open BAM file")?;
-                let header = get_bam_header(self.file_path.clone())?;
 
                 // Query for reads overlapping the region.
                 let records = reader.query(&header, &region)?;
@@ -293,21 +294,24 @@ impl BamPileup {
     /// The DataFrame will have columns "chrom", "start", "end" and "score".
     fn pileup_to_polars(&self) -> Result<DataFrame> {
         let pileup = self.pileup()?;
-
+    
         // Process each chromosome in parallel and combine into column vectors.
         let (chroms, starts, ends, scores) = pileup
             .into_par_iter()
             .map(|(chrom, intervals)| {
-                let chrom_vec = vec![chrom; intervals.len()];
-                let start_vec = intervals
-                    .iter()
-                    .map(|iv| iv.start as u64)
-                    .collect::<Vec<_>>();
-                let end_vec = intervals
-                    .iter()
-                    .map(|iv| iv.stop as u64)
-                    .collect::<Vec<_>>();
-                let score_vec = intervals.iter().map(|iv| iv.val as u32).collect::<Vec<_>>();
+                let n = intervals.len();
+                // Preallocate with exact capacity.
+                let mut start_vec = Vec::with_capacity(n);
+                let mut end_vec = Vec::with_capacity(n);
+                let mut score_vec = Vec::with_capacity(n);
+                // Process each interval in one pass.
+                for iv in intervals {
+                    start_vec.push(iv.start as u64);
+                    end_vec.push(iv.stop as u64);
+                    score_vec.push(iv.val as u32);
+                }
+                // Create the chrom vector by repeating the chromosome name.
+                let chrom_vec = vec![chrom; n];
                 (chrom_vec, start_vec, end_vec, score_vec)
             })
             .reduce(
@@ -321,8 +325,8 @@ impl BamPileup {
                     (chrom_a, start_a, end_a, score_a)
                 },
             );
-
-        // Build the DataFrame.
+    
+        // Build the DataFrame using the combined vectors.
         let df = DataFrame::new(vec![
             Column::new("chrom".into(), chroms),
             Column::new("start".into(), starts),
@@ -331,6 +335,7 @@ impl BamPileup {
         ])?;
         Ok(df)
     }
+    
 
     /// Normalize the pileup signal using the provided normalization method.
     fn pileup_normalised(&self) -> Result<DataFrame> {
