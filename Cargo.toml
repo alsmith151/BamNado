@@ -5,7 +5,7 @@ edition = "2021"
 
 [dependencies]
 ahash = "0.8.11"
-anyhow = "1.0.86"
+anyhow = "1.0.97"
 bigtools = "0.5.5"
 bio = "2.0.0"
 bio-types = "1.0.1"
@@ -15,9 +15,7 @@ indicatif = {version = "*", features = ["rayon"]}
 itertools = "*"
 log = "0.4.22"
 noodles = {version = '0.93.0', features = ['bgzf', 'cram','bed', 'core', 'csi', 'async', 'sam', 'bam']}
-#noodles-bam = {features = ['async'], version = '0.66.0'}
-#noodles-sam = {features = ['async'], version = '0.63.0'}
-polars = {version = "*", features = ['lazy']}
+polars = {version = "*", features = ['lazy', "polars-ops", "cum_agg"]}
 rayon = "1.10.0"
 rust-lapper = "1.1.0"
 tempfile = "3.10.1"

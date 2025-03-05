@@ -1,7 +1,7 @@
 use std::cmp::min;
 
 use ahash::HashMap;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use noodles::core::Position;
 
 use noodles::{bam, sam};
@@ -28,6 +28,8 @@ pub struct IntervalMaker<'a> {
     shift: [usize; 4],
 }
 
+
+
 impl IntervalMaker<'_> {
     pub fn new<'a>(
         read: bam::Record,
@@ -53,35 +55,34 @@ impl IntervalMaker<'_> {
     }
 
     fn coords_fragment(&self) -> Option<(usize, usize, usize)> {
-        let is_read_1 = self.read.flags().is_first_segment();
-        let is_reverse = self.read.flags().is_reverse_complemented();
-        let read = &self.read;
+        // Only compute coordinates for the first segment to avoid duplicating paired-end fragments.
+        if !self.read.flags().is_first_segment() {
+            return None;
+        }
+    
+        let template_length = self.read.template_length();
+        if template_length > 0 {
+            // For a positive template length, the first read is leftmost.
+            // Use its alignment start as the fragment start.
 
-        if is_read_1 {
-            if !is_reverse {
-                let r1_start = read
-                    .alignment_start()
-                    .expect("Failed to get start")
-                    .expect("Error with getting start")
-                    .get();
-                let r1_length = read.sequence().len();
-                let r1_end = r1_start + r1_length;
-
-                let start = r1_end;
-                let end = start + read.template_length() as usize;
-                Some((start, end, 0))
-            } else {
-                let r2_start = read
-                    .mate_alignment_start()
-                    .expect("Failed to get mate start")
-                    .expect("Error with getting mate start")
-                    .get();
-
-                let start = r2_start;
-                let end = start + read.template_length().abs() as usize;
-                Some((start, end, 0))
-            }
+            let start = self.read
+                .alignment_start()
+                .expect("No start position")
+                .expect("Error with getting start")
+                .get();
+            let end = start + template_length as usize;
+            Some((start, end, 0))
+        } else if template_length < 0 {
+            // For a negative template length, the mate is leftmost.
+            let start = self.read
+                .mate_alignment_start()
+                .expect("No start position")
+                .expect("Error with getting start")
+                .get();
+            let end = start + template_length.abs() as usize;
+            Some((start, end, 0))
         } else {
+            // Template length of zero indicates an invalid or degenerate fragment.
             None
         }
     }
