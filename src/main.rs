@@ -7,7 +7,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-mod count;
+mod pileup;
 mod filter;
 mod intervals;
 mod spikein;
@@ -215,7 +215,7 @@ fn main() {
                 None,
                 whitelisted_barcodes,
             );
-            let coverage = count::BamPileup::new(
+            let coverage = pileup::BamPileup::new(
                 bam.clone(),
                 bin_size.unwrap_or(50),
                 norm_method
@@ -224,6 +224,7 @@ fn main() {
                 scale_factor.unwrap_or(1.0),
                 *use_fragment,
                 filter,
+                true
             );
 
             let outfile = match output {
@@ -290,129 +291,132 @@ fn main() {
             }
 
         },
-        Some(Commands::MultiBamCoverage { bams, output, bin_size, norm_method, scale_factor, use_fragment }) => {
+
+        Some(Commands::MultiBamCoverage { bams, output, bin_size, norm_method, scale_factor, use_fragment }) => todo!(),
+
+        // Some(Commands::MultiBamCoverage { bams, output, bin_size, norm_method, scale_factor, use_fragment }) => {
             
-            let bam_files: Vec<&Path> = bams.iter().map(|x| x.as_path()).collect();
+        //     let bam_files: Vec<&Path> = bams.iter().map(|x| x.as_path()).collect();
 
-            // Check if all BAM files exist
-            for bam in &bam_files {
-                if !bam.exists() {
-                    error!("BAM file does not exist");
-                    exit(1);
-                } else if !bam.with_extension("bam.bai").exists() {
-                    error!("BAM index file does not exist. Please create the index file using samtools index command");
-                }
-            }
+        //     // Check if all BAM files exist
+        //     for bam in &bam_files {
+        //         if !bam.exists() {
+        //             error!("BAM file does not exist");
+        //             exit(1);
+        //         } else if !bam.with_extension("bam.bai").exists() {
+        //             error!("BAM index file does not exist. Please create the index file using samtools index command");
+        //         }
+        //     }
 
-            let output = output.clone().unwrap_or_else(|| {
-                let mut output = PathBuf::new();
-                output.push("output");
-                output.set_extension("bedgraph");
-                output
-            });
+        //     let output = output.clone().unwrap_or_else(|| {
+        //         let mut output = PathBuf::new();
+        //         output.push("output");
+        //         output.set_extension("bedgraph");
+        //         output
+        //     });
 
-            let bam_filters: Vec<filter::BamReadFilter> = match &cli.whitelisted_barcodes {
-                Some(whitelist) => {
-                    let barcodes =
-                        utils::CellBarcodesMulti::from_csv(whitelist).expect("Failed to read barcodes");
+        //     let bam_filters: Vec<filter::BamReadFilter> = match &cli.whitelisted_barcodes {
+        //         Some(whitelist) => {
+        //             let barcodes =
+        //                 utils::CellBarcodesMulti::from_csv(whitelist).expect("Failed to read barcodes");
                     
-                    bam_files.iter().zip(barcodes.barcodes()).map(|(bam, bc)| {
-                        let filter = filter::BamReadFilter::new(
-                            cli.proper_pair,
-                            Some(cli.min_mapq),
-                            Some(cli.min_length),
-                            Some(cli.max_length),
-                            None,
-                            Some(bc),
-                        );
-                        filter
-                    }).collect()
-                },
-                None => {
-                    bam_files.iter().map(|bam| {
-                        let filter = filter::BamReadFilter::new(
-                            cli.proper_pair,
-                            Some(cli.min_mapq),
-                            Some(cli.min_length),
-                            Some(cli.max_length),
-                            None,
-                            None,
-                        );
-                        filter
-                    }).collect()
-                }
-            };
+        //             bam_files.iter().zip(barcodes.barcodes()).map(|(bam, bc)| {
+        //                 let filter = filter::BamReadFilter::new(
+        //                     cli.proper_pair,
+        //                     Some(cli.min_mapq),
+        //                     Some(cli.min_length),
+        //                     Some(cli.max_length),
+        //                     None,
+        //                     Some(bc),
+        //                 );
+        //                 filter
+        //             }).collect()
+        //         },
+        //         None => {
+        //             bam_files.iter().map(|bam| {
+        //                 let filter = filter::BamReadFilter::new(
+        //                     cli.proper_pair,
+        //                     Some(cli.min_mapq),
+        //                     Some(cli.min_length),
+        //                     Some(cli.max_length),
+        //                     None,
+        //                     None,
+        //                 );
+        //                 filter
+        //             }).collect()
+        //         }
+        //     };
 
-            let coverage = count::MultiBamPileup::new(
-                bam_files.iter().map(|x| x.to_path_buf()).collect(),
-                bin_size.unwrap_or(50),
-                norm_method
-                    .clone()
-                    .unwrap_or(utils::NormalizationMethod::Raw),
-                scale_factor.unwrap_or(1.0),
-                *use_fragment,
-                bam_filters,
-                count::AggregationMethod::Mean,
-            );
+        //     let coverage = count::MultiBamPileup::new(
+        //         bam_files.iter().map(|x| x.to_path_buf()).collect(),
+        //         bin_size.unwrap_or(50),
+        //         norm_method
+        //             .clone()
+        //             .unwrap_or(utils::NormalizationMethod::Raw),
+        //         scale_factor.unwrap_or(1.0),
+        //         *use_fragment,
+        //         bam_filters,
+        //         count::AggregationMethod::Mean,
+        //     );
 
-            let output_type = match output.extension() {
-                Some(ext) => match ext.to_str() {
-                    Some(ext) => match FileType::from_str(ext) {
-                        Ok(file_type) => Some(file_type),
-                        Err(e) => {
-                            error!("{}", e);
-                            None
-                        }
-                    },
-                    None => {
-                        error!("Could not determine file type from extension");
-                        None
-                    }
-                },
-                None => {
-                    error!("Could not determine file type from extension");
-                    None
-                }
-            };
+        //     let output_type = match output.extension() {
+        //         Some(ext) => match ext.to_str() {
+        //             Some(ext) => match FileType::from_str(ext) {
+        //                 Ok(file_type) => Some(file_type),
+        //                 Err(e) => {
+        //                     error!("{}", e);
+        //                     None
+        //                 }
+        //             },
+        //             None => {
+        //                 error!("Could not determine file type from extension");
+        //                 None
+        //             }
+        //         },
+        //         None => {
+        //             error!("Could not determine file type from extension");
+        //             None
+        //         }
+        //     };
 
-            let result = match output_type {
-                Some(FileType::Bedgraph) => coverage.to_bedgraph(output),
-                Some(FileType::Bigwig) => {
-                    // Check that bedGraphToBigWig is in the PATH
+        //     let result = match output_type {
+        //         Some(FileType::Bedgraph) => coverage.to_bedgraph(output),
+        //         Some(FileType::Bigwig) => {
+        //             // Check that bedGraphToBigWig is in the PATH
 
-                    // Check if the bedGraphToBigWig tool is in the PATH
-                    let bdg_to_bw = std::process::Command::new("bedGraphToBigWig").output();
-                    match bdg_to_bw {
-                        std::result::Result::Ok(_) => {
-                            log::info!("bedGraphToBigWig tool found in PATH");
-                        }
-                        Err(_) => {
-                            log::error!("bedGraphToBigWig tool not found in PATH. Please install the tool and try again");
-                            std::process::exit(1);
-                        }
-                    };
+        //             // Check if the bedGraphToBigWig tool is in the PATH
+        //             let bdg_to_bw = std::process::Command::new("bedGraphToBigWig").output();
+        //             match bdg_to_bw {
+        //                 std::result::Result::Ok(_) => {
+        //                     log::info!("bedGraphToBigWig tool found in PATH");
+        //                 }
+        //                 Err(_) => {
+        //                     log::error!("bedGraphToBigWig tool not found in PATH. Please install the tool and try again");
+        //                     std::process::exit(1);
+        //                 }
+        //             };
 
-                    coverage.to_bigwig(output)
-                }
-                None => {
-                    exit(1);
-                }
-            };
+        //             coverage.to_bigwig(output)
+        //         }
+        //         None => {
+        //             exit(1);
+        //         }
+        //     };
                     
 
-            match result {
-                Ok(_) => {
-                    info!("Successfully wrote output");
-                }
-                Err(e) => {
-                    error!("Error writing output: {}", e);
-                    exit(1);
-                }
-            }
+        //     match result {
+        //         Ok(_) => {
+        //             info!("Successfully wrote output");
+        //         }
+        //         Err(e) => {
+        //             error!("Error writing output: {}", e);
+        //             exit(1);
+        //         }
+        //     }
 
 
 
-        }
+        // }
         Some(Commands::SplitExogenous {
             input,
             output,
