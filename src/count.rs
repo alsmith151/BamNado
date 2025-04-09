@@ -268,6 +268,7 @@ impl Display for BamPileup {
 
 /// Represents methods for aggregating signals across multiple BAM files.
 pub enum AggregationMethod {
+    None,
     Sum,
     Mean,
 }

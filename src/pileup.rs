@@ -460,4 +460,17 @@ impl MultiBamPileup {
 
         Ok(df)
     }
+
+    pub fn to_tsv(&self, outfile: &PathBuf) -> Result<()> {
+        let mut df = self.pileup()?;
+        let mut file = std::fs::File::create(outfile)?;
+        CsvWriter::new(&mut file)
+            .include_header(true)
+            .with_separator(b'\t')
+            .finish(&mut df)?;
+
+        Ok(())
+    }
+
+
 }
