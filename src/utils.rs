@@ -414,6 +414,7 @@ impl BamStats {
 pub enum FileType {
     Bedgraph,
     Bigwig,
+    TSV,
 }
 
 impl FileType {
@@ -423,6 +424,8 @@ impl FileType {
             "bdg" => Ok(FileType::Bedgraph),
             "bigwig" => Ok(FileType::Bigwig),
             "bw" => Ok(FileType::Bigwig),
+            "tsv" => Ok(FileType::TSV),
+            "txt" => Ok(FileType::TSV),
             _ => Err(format!("Unknown file type: {}", s)),
         }
     }
