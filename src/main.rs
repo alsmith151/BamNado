@@ -81,13 +81,17 @@ struct Cli {
     #[arg(long, required = false, default_value = "1000")]
     max_length: u32,
 
-    /// Blacklisted locations in BED format
+    /// Blacklisted locations in BED format -- WORK IN PROGRESS
     #[arg(long, required = false)]
     blacklisted_locations: Option<PathBuf>,
 
     /// Whitelisted barcodes in a text file (one barcode per line)
     #[arg(long, required = false)]
     whitelisted_barcodes: Option<PathBuf>,
+
+    /// Selected read group
+    #[arg(long, required = false)]
+    read_group: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -181,6 +185,13 @@ fn main() {
     colog::init();
 
     let cli = Cli::parse();
+    let log_level = match cli.verbose {
+        0 => log::LevelFilter::Error,
+        1 => log::LevelFilter::Warn,
+        2 => log::LevelFilter::Info,
+        3 => log::LevelFilter::Debug,
+        _ => log::LevelFilter::Trace,
+    };
 
     match &cli.command {
         Some(Commands::BamCoverage {
@@ -212,9 +223,12 @@ fn main() {
                 Some(cli.min_mapq),
                 Some(cli.min_length),
                 Some(cli.max_length),
+                cli.read_group,
                 None,
                 whitelisted_barcodes,
             );
+
+
             let coverage = pileup::BamPileup::new(
                 bam.clone(),
                 bin_size.unwrap_or(50),
@@ -337,6 +351,7 @@ fn main() {
                                 Some(cli.min_length),
                                 Some(cli.max_length),
                                 None,
+                                None,
                                 Some(bc),
                             );
                             filter
@@ -351,6 +366,7 @@ fn main() {
                             Some(cli.min_mapq),
                             Some(cli.min_length),
                             Some(cli.max_length),
+                            None,
                             None,
                             None,
                         );
@@ -472,6 +488,7 @@ fn main() {
                 Some(cli.min_mapq),
                 Some(cli.min_length),
                 Some(cli.max_length),
+                None,
                 None,
                 whitelisted_barcodes,
             );
