@@ -163,6 +163,13 @@ enum Commands {
         /// Path for stats output
         #[arg(short, long)]
         stats: Option<PathBuf>,
+
+        /// Allow unknown MAPQ values - useful for BAM files with MAPQ=255 i.e. STAR generated BAM files
+        #[arg(long, action = clap::ArgAction::SetTrue)]
+        allow_unknown_mapq: bool,
+
+        
+
     },
 
     /// Split a BAM file based on cell barcodes
@@ -425,11 +432,13 @@ fn main() {
             output,
             exogenous_prefix,
             stats,
+            allow_unknown_mapq,
         }) => {
             let mut split = spikein::BamSplitter::new(
                 input.to_path_buf(),
                 output.to_path_buf(),
                 exogenous_prefix.to_string(),
+                *allow_unknown_mapq,
             )
             .expect("Failed to create BamSplitter");
             match split.split() {
