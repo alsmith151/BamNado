@@ -76,7 +76,7 @@ impl Display for BamReadFilterStatsSnapshot {
 /// A filter for BAM reads.
 /// Set the minimum mapping quality, minimum and maximum read length, blacklisted locations, and whitelisted barcodes.
 /// The filter is applied to each read in the BAM file.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct BamReadFilter {
     // Properly paired reads only
     proper_pair: bool,

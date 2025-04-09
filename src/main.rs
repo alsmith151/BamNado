@@ -7,12 +7,12 @@ use std::{
     path::{Path, PathBuf},
 };
 
-mod pileup;
 mod filter;
 mod intervals;
+mod pileup;
 mod spikein;
-mod utils;
 mod split;
+mod utils;
 
 use crate::utils::FileType;
 
@@ -224,7 +224,7 @@ fn main() {
                 scale_factor.unwrap_or(1.0),
                 *use_fragment,
                 filter,
-                true
+                true,
             );
 
             let outfile = match output {
@@ -275,6 +275,10 @@ fn main() {
 
                     coverage.to_bigwig(outfile)
                 }
+                Some(FileType::TSV) => {
+                    error!("TSV output is not supported for single BAM coverage");
+                    exit(1);
+                }
                 None => {
                     exit(1);
                 }
@@ -289,134 +293,133 @@ fn main() {
                     exit(1);
                 }
             }
+        }
 
-        },
+        Some(Commands::MultiBamCoverage {
+            bams,
+            output,
+            bin_size,
+            norm_method,
+            scale_factor,
+            use_fragment,
+        }) => {
+            let bam_files: Vec<&Path> = bams.iter().map(|x| x.as_path()).collect();
 
-        Some(Commands::MultiBamCoverage { bams, output, bin_size, norm_method, scale_factor, use_fragment }) => todo!(),
+            // Check if all BAM files exist
+            for bam in &bam_files {
+                if !bam.exists() {
+                    error!("BAM file does not exist");
+                    exit(1);
+                } else if !bam.with_extension("bam.bai").exists() {
+                    error!("BAM index file does not exist. Please create the index file using samtools index command");
+                }
+            }
 
-        // Some(Commands::MultiBamCoverage { bams, output, bin_size, norm_method, scale_factor, use_fragment }) => {
+            let output = output.clone().unwrap_or_else(|| {
+                let mut output = PathBuf::new();
+                output.push("output");
+                output.set_extension("bedgraph");
+                output
+            });
+
+            let bam_filters: Vec<filter::BamReadFilter> = match &cli.whitelisted_barcodes {
+                Some(whitelist) => {
+                    let barcodes = utils::CellBarcodesMulti::from_csv(whitelist)
+                        .expect("Failed to read barcodes");
+
+                    bam_files
+                        .iter()
+                        .zip(barcodes.barcodes())
+                        .map(|(bam, bc)| {
+                            let filter = filter::BamReadFilter::new(
+                                cli.proper_pair,
+                                Some(cli.min_mapq),
+                                Some(cli.min_length),
+                                Some(cli.max_length),
+                                None,
+                                Some(bc),
+                            );
+                            filter
+                        })
+                        .collect()
+                }
+                None => bam_files
+                    .iter()
+                    .map(|bam| {
+                        let filter = filter::BamReadFilter::new(
+                            cli.proper_pair,
+                            Some(cli.min_mapq),
+                            Some(cli.min_length),
+                            Some(cli.max_length),
+                            None,
+                            None,
+                        );
+                        filter
+                    })
+                    .collect(),
+            };
+
+            let pileups: Vec<_> = bam_files
+                .iter()
+                .zip(bam_filters.iter())
+                .map(|(bam, filter)| {
+                    pileup::BamPileup::new(
+                        bam.to_path_buf(),
+                        bin_size.unwrap_or(50),
+                        norm_method
+                            .clone()
+                            .unwrap_or(utils::NormalizationMethod::Raw),
+                        scale_factor.unwrap_or(1.0),
+                        *use_fragment,
+                        filter.clone(),
+                        false,
+                    )
+                })
+                .collect();
+
+            let coverage = pileup::MultiBamPileup::new(pileups);
+
+            let output_type = match output.extension() {
+                Some(ext) => match ext.to_str() {
+                    Some(ext) => match FileType::from_str(ext) {
+                        Ok(file_type) => Some(file_type),
+                        Err(e) => {
+                            error!("{}", e);
+                            None
+                        }
+                    },
+                    None => {
+                        error!("Could not determine file type from extension");
+                        None
+                    }
+                },
+                None => {
+                    error!("Could not determine file type from extension");
+                    None
+                }
+            };
+
+            let result = match output_type {
+                Some(FileType::TSV) => coverage.to_tsv(&output),
+                _ => {
+                    error!("Unsupported output format. Currently only TSV is supported");
+                    exit(1);
+                }
+            };
+
             
-        //     let bam_files: Vec<&Path> = bams.iter().map(|x| x.as_path()).collect();
+            match result.context("Failed to write output")
+            {
+                Ok(_) => {
+                    info!("Successfully wrote output");
+                }
+                Err(e) => {
+                    error!("Error writing output: {}", e);
+                    exit(1);
+                }
+            }
 
-        //     // Check if all BAM files exist
-        //     for bam in &bam_files {
-        //         if !bam.exists() {
-        //             error!("BAM file does not exist");
-        //             exit(1);
-        //         } else if !bam.with_extension("bam.bai").exists() {
-        //             error!("BAM index file does not exist. Please create the index file using samtools index command");
-        //         }
-        //     }
-
-        //     let output = output.clone().unwrap_or_else(|| {
-        //         let mut output = PathBuf::new();
-        //         output.push("output");
-        //         output.set_extension("bedgraph");
-        //         output
-        //     });
-
-        //     let bam_filters: Vec<filter::BamReadFilter> = match &cli.whitelisted_barcodes {
-        //         Some(whitelist) => {
-        //             let barcodes =
-        //                 utils::CellBarcodesMulti::from_csv(whitelist).expect("Failed to read barcodes");
-                    
-        //             bam_files.iter().zip(barcodes.barcodes()).map(|(bam, bc)| {
-        //                 let filter = filter::BamReadFilter::new(
-        //                     cli.proper_pair,
-        //                     Some(cli.min_mapq),
-        //                     Some(cli.min_length),
-        //                     Some(cli.max_length),
-        //                     None,
-        //                     Some(bc),
-        //                 );
-        //                 filter
-        //             }).collect()
-        //         },
-        //         None => {
-        //             bam_files.iter().map(|bam| {
-        //                 let filter = filter::BamReadFilter::new(
-        //                     cli.proper_pair,
-        //                     Some(cli.min_mapq),
-        //                     Some(cli.min_length),
-        //                     Some(cli.max_length),
-        //                     None,
-        //                     None,
-        //                 );
-        //                 filter
-        //             }).collect()
-        //         }
-        //     };
-
-        //     let coverage = count::MultiBamPileup::new(
-        //         bam_files.iter().map(|x| x.to_path_buf()).collect(),
-        //         bin_size.unwrap_or(50),
-        //         norm_method
-        //             .clone()
-        //             .unwrap_or(utils::NormalizationMethod::Raw),
-        //         scale_factor.unwrap_or(1.0),
-        //         *use_fragment,
-        //         bam_filters,
-        //         count::AggregationMethod::Mean,
-        //     );
-
-        //     let output_type = match output.extension() {
-        //         Some(ext) => match ext.to_str() {
-        //             Some(ext) => match FileType::from_str(ext) {
-        //                 Ok(file_type) => Some(file_type),
-        //                 Err(e) => {
-        //                     error!("{}", e);
-        //                     None
-        //                 }
-        //             },
-        //             None => {
-        //                 error!("Could not determine file type from extension");
-        //                 None
-        //             }
-        //         },
-        //         None => {
-        //             error!("Could not determine file type from extension");
-        //             None
-        //         }
-        //     };
-
-        //     let result = match output_type {
-        //         Some(FileType::Bedgraph) => coverage.to_bedgraph(output),
-        //         Some(FileType::Bigwig) => {
-        //             // Check that bedGraphToBigWig is in the PATH
-
-        //             // Check if the bedGraphToBigWig tool is in the PATH
-        //             let bdg_to_bw = std::process::Command::new("bedGraphToBigWig").output();
-        //             match bdg_to_bw {
-        //                 std::result::Result::Ok(_) => {
-        //                     log::info!("bedGraphToBigWig tool found in PATH");
-        //                 }
-        //                 Err(_) => {
-        //                     log::error!("bedGraphToBigWig tool not found in PATH. Please install the tool and try again");
-        //                     std::process::exit(1);
-        //                 }
-        //             };
-
-        //             coverage.to_bigwig(output)
-        //         }
-        //         None => {
-        //             exit(1);
-        //         }
-        //     };
-                    
-
-        //     match result {
-        //         Ok(_) => {
-        //             info!("Successfully wrote output");
-        //         }
-        //         Err(e) => {
-        //             error!("Error writing output: {}", e);
-        //             exit(1);
-        //         }
-        //     }
-
-
-
-        // }
+        }
         Some(Commands::SplitExogenous {
             input,
             output,
@@ -453,13 +456,8 @@ fn main() {
                     exit(1);
                 }
             }
-        },
-        Some(Commands::Split {
-            input,
-            output,
-        }) => {
-
-
+        }
+        Some(Commands::Split { input, output }) => {
             let whitelisted_barcodes = match &cli.whitelisted_barcodes {
                 Some(whitelist) => {
                     let barcodes =
@@ -468,7 +466,6 @@ fn main() {
                 }
                 None => None,
             };
-
 
             let filter = filter::BamReadFilter::new(
                 cli.proper_pair,
@@ -479,29 +476,16 @@ fn main() {
                 whitelisted_barcodes,
             );
 
-
-            let split = split::BamSplitter::new(
-                input.to_path_buf(),
-                output.to_path_buf(),
-                filter,
-            );
+            let split = split::BamSplitter::new(input.to_path_buf(), output.to_path_buf(), filter);
 
             let rt = tokio::runtime::Builder::new_current_thread()
-                                .enable_all()
-                                .build()
-                                .unwrap();
+                .enable_all()
+                .build()
+                .unwrap();
 
-            
             let split_future = split.split_async();
             rt.block_on(split_future).expect("Failed to split BAM file");
-
-
-
-        },
-
-
-
-
+        }
 
         None => {
             eprintln!("No subcommand provided");
