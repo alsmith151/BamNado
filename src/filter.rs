@@ -94,7 +94,7 @@ pub struct BamReadFilter {
     // Maximum read length
     max_length: u32,
     // Blacklisted locations (chromosome -> Lapper)
-    blacklisted_locations: Option<HashMap<usize, Lapper<usize, i32>>>,
+    blacklisted_locations: Option<HashMap<String, Lapper<usize, u32>>>,
     // Whitelisted barcodes (cell barcodes to keep)
     whitelisted_barcodes: Option<HashSet<String>>,
     // Read group to keep
@@ -146,7 +146,7 @@ impl BamReadFilter {
         min_length: Option<u32>,
         max_length: Option<u32>,
         read_group: Option<String>,
-        blacklisted_locations: Option<HashMap<usize, Lapper<usize, i32>>>,
+        blacklisted_locations: Option<HashMap<String, Lapper<usize, u32>>>,
         whitelisted_barcodes: Option<HashSet<String>>,
     ) -> Self {
         let min_mapq = min_mapq.unwrap_or(0);
@@ -235,7 +235,7 @@ impl BamReadFilter {
 
         // Filter by blacklisted locations.
         if let Some(blacklisted_locations) = &self.blacklisted_locations {
-            if let Some(blacklist) = blacklisted_locations.get(&chrom) {
+            if let Some(blacklist) = blacklisted_locations.get(&chrom.to_string()) {
                 if blacklist.count(start, end) > 0 {
                     self.stats.n_failed_blacklist.fetch_add(1, Ordering::Relaxed);
                     return Ok(false);
