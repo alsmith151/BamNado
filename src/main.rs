@@ -367,6 +367,14 @@ fn main() {
                 Some(whitelist) => {
                     let barcodes = utils::CellBarcodesMulti::from_csv(whitelist)
                         .expect("Failed to read barcodes");
+                
+                    let blacklist_regions = match &filter_options.blacklisted_locations {
+                        Some(blacklist) => {
+                            Some(utils::bed_to_lapper(blacklist.clone()).expect("Failed to read blacklisted locations"))
+                        }
+                        None => None,
+                    };
+
 
                     bam_files
                         .iter()
@@ -378,7 +386,7 @@ fn main() {
                                 Some(filter_options.min_length),
                                 Some(filter_options.max_length),
                                 filter_options.read_group.clone(),
-                                None,
+                                blacklist_regions.clone(),
                                 Some(bc),
                             );
                             filter
@@ -478,13 +486,20 @@ fn main() {
                 None => None,
             };
 
+            let blacklisted_locations = match &filter_options.blacklisted_locations {
+                Some(blacklist) => {
+                    Some(utils::bed_to_lapper(blacklist.clone()).expect("Failed to read blacklisted locations"))
+                }
+                None => None,
+            };
+
             let filter = filter::BamReadFilter::new(
                 filter_options.proper_pair,
                 Some(filter_options.min_mapq),
                 Some(filter_options.min_length),
                 Some(filter_options.max_length),
                 filter_options.read_group.clone(),
-                None,
+                blacklisted_locations.clone(),
                 whitelisted_barcodes,
             );
 
@@ -535,13 +550,20 @@ fn main() {
                 None => None,
             };
 
+            let blacklisted_locations = match &filter_options.blacklisted_locations {
+                Some(blacklist) => {
+                    Some(utils::bed_to_lapper(blacklist.clone()).expect("Failed to read blacklisted locations"))
+                }
+                None => None,
+            };
+
             let filter = filter::BamReadFilter::new(
                 filter_options.proper_pair,
                 Some(filter_options.min_mapq),
                 Some(filter_options.min_length),
                 Some(filter_options.max_length),
                 filter_options.read_group.clone(),
-                None,
+                blacklisted_locations,
                 whitelisted_barcodes,
             );
 
