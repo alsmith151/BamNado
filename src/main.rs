@@ -484,7 +484,6 @@ fn main() {
                 output.to_path_buf(),
                 exogenous_prefix.to_string(),
                 *allow_unknown_mapq,
-                filter,
             )
             .expect("Failed to create BamSplitter");
             
