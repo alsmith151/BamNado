@@ -54,17 +54,9 @@ pub fn get_styles() -> clap::builder::Styles {
         )
 }
 
-#[derive(Parser)]
-#[command(author, version, about, long_about = None, styles=get_styles())]
-struct Cli {
-    #[command(subcommand)]
-    command: Option<Commands>,
-
-    /// Verbosity level
-    #[arg(short, long, required = false, default_value = "0")]
-    verbose: u8,
-
-    // Filter parameters
+// Define common filter options as a trait to avoid code duplication
+#[derive(Parser, Clone)]
+struct FilterOptions {
     /// Properly paired reads only
     #[arg(long, action = clap::ArgAction::SetTrue)]
     proper_pair: bool,
@@ -88,6 +80,17 @@ struct Cli {
     /// Whitelisted barcodes in a text file (one barcode per line)
     #[arg(long, required = false)]
     whitelisted_barcodes: Option<PathBuf>,
+}
+
+#[derive(Parser)]
+#[command(author, version, about, long_about = None, styles=get_styles())]
+struct Cli {
+    #[command(subcommand)]
+    command: Commands,
+
+    /// Verbosity level
+    #[arg(short, long, required = false, default_value = "0")]
+    verbose: u8,
 }
 
 #[derive(Subcommand)]
@@ -117,6 +120,9 @@ enum Commands {
         /// Use the fragment or the read for counting
         #[arg(long, action = clap::ArgAction::SetTrue)]
         use_fragment: bool,
+
+        #[command(flatten)]
+        filter_options: FilterOptions,
     },
 
     /// Calculate coverage from multiple BAM files and write to a bedGraph or bigWig file
@@ -144,6 +150,9 @@ enum Commands {
         /// Use the fragment or the read for counting
         #[arg(long, action = clap::ArgAction::SetTrue)]
         use_fragment: bool,
+        
+        #[command(flatten)]
+        filter_options: FilterOptions,
     },
 
     /// Split a BAM file into endogenous and exogenous reads
@@ -167,9 +176,9 @@ enum Commands {
         /// Allow unknown MAPQ values - useful for BAM files with MAPQ=255 i.e. STAR generated BAM files
         #[arg(long, action = clap::ArgAction::SetTrue)]
         allow_unknown_mapq: bool,
-
         
-
+        #[command(flatten)]
+        filter_options: FilterOptions,
     },
 
     /// Split a BAM file based on cell barcodes
@@ -181,6 +190,9 @@ enum Commands {
         /// Output prefix
         #[arg(short, long)]
         output: PathBuf,
+        
+        #[command(flatten)]
+        filter_options: FilterOptions,
     },
 }
 
@@ -190,14 +202,15 @@ fn main() {
     let cli = Cli::parse();
 
     match &cli.command {
-        Some(Commands::BamCoverage {
+        Commands::BamCoverage {
             bam,
             output,
             bin_size,
             norm_method,
             scale_factor,
             use_fragment,
-        }) => {
+            filter_options,
+        } => {
             if !bam.exists() {
                 error!("BAM file does not exist");
                 exit(1);
@@ -205,7 +218,7 @@ fn main() {
                 error!("BAM index file does not exist. Please create the index file using samtools index command");
             }
 
-            let whitelisted_barcodes = match &cli.whitelisted_barcodes {
+            let whitelisted_barcodes = match &filter_options.whitelisted_barcodes {
                 Some(whitelist) => {
                     let barcodes =
                         utils::CellBarcodes::from_csv(whitelist).expect("Failed to read barcodes");
@@ -215,10 +228,10 @@ fn main() {
             };
 
             let filter = filter::BamReadFilter::new(
-                cli.proper_pair,
-                Some(cli.min_mapq),
-                Some(cli.min_length),
-                Some(cli.max_length),
+                filter_options.proper_pair,
+                Some(filter_options.min_mapq),
+                Some(filter_options.min_length),
+                Some(filter_options.max_length),
                 None,
                 whitelisted_barcodes,
             );
@@ -302,14 +315,15 @@ fn main() {
             }
         }
 
-        Some(Commands::MultiBamCoverage {
+        Commands::MultiBamCoverage {
             bams,
             output,
             bin_size,
             norm_method,
             scale_factor,
             use_fragment,
-        }) => {
+            filter_options,
+        } => {
             let bam_files: Vec<&Path> = bams.iter().map(|x| x.as_path()).collect();
 
             // Check if all BAM files exist
@@ -329,7 +343,7 @@ fn main() {
                 output
             });
 
-            let bam_filters: Vec<filter::BamReadFilter> = match &cli.whitelisted_barcodes {
+            let bam_filters: Vec<filter::BamReadFilter> = match &filter_options.whitelisted_barcodes {
                 Some(whitelist) => {
                     let barcodes = utils::CellBarcodesMulti::from_csv(whitelist)
                         .expect("Failed to read barcodes");
@@ -339,10 +353,10 @@ fn main() {
                         .zip(barcodes.barcodes())
                         .map(|(bam, bc)| {
                             let filter = filter::BamReadFilter::new(
-                                cli.proper_pair,
-                                Some(cli.min_mapq),
-                                Some(cli.min_length),
-                                Some(cli.max_length),
+                                filter_options.proper_pair,
+                                Some(filter_options.min_mapq),
+                                Some(filter_options.min_length),
+                                Some(filter_options.max_length),
                                 None,
                                 Some(bc),
                             );
@@ -354,10 +368,10 @@ fn main() {
                     .iter()
                     .map(|bam| {
                         let filter = filter::BamReadFilter::new(
-                            cli.proper_pair,
-                            Some(cli.min_mapq),
-                            Some(cli.min_length),
-                            Some(cli.max_length),
+                            filter_options.proper_pair,
+                            Some(filter_options.min_mapq),
+                            Some(filter_options.min_length),
+                            Some(filter_options.max_length),
                             None,
                             None,
                         );
@@ -427,13 +441,14 @@ fn main() {
             }
 
         }
-        Some(Commands::SplitExogenous {
+        Commands::SplitExogenous {
             input,
             output,
             exogenous_prefix,
             stats,
             allow_unknown_mapq,
-        }) => {
+            filter_options,
+        } => {
             let mut split = spikein::BamSplitter::new(
                 input.to_path_buf(),
                 output.to_path_buf(),
@@ -466,8 +481,12 @@ fn main() {
                 }
             }
         }
-        Some(Commands::Split { input, output }) => {
-            let whitelisted_barcodes = match &cli.whitelisted_barcodes {
+        Commands::Split { 
+            input, 
+            output,
+            filter_options,
+        } => {
+            let whitelisted_barcodes = match &filter_options.whitelisted_barcodes {
                 Some(whitelist) => {
                     let barcodes =
                         utils::CellBarcodes::from_csv(whitelist).expect("Failed to read barcodes");
@@ -477,10 +496,10 @@ fn main() {
             };
 
             let filter = filter::BamReadFilter::new(
-                cli.proper_pair,
-                Some(cli.min_mapq),
-                Some(cli.min_length),
-                Some(cli.max_length),
+                filter_options.proper_pair,
+                Some(filter_options.min_mapq),
+                Some(filter_options.min_length),
+                Some(filter_options.max_length),
                 None,
                 whitelisted_barcodes,
             );
@@ -494,11 +513,6 @@ fn main() {
 
             let split_future = split.split_async();
             rt.block_on(split_future).expect("Failed to split BAM file");
-        }
-
-        None => {
-            eprintln!("No subcommand provided");
-            std::process::exit(1);
         }
     }
 }
