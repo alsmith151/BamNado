@@ -10,7 +10,7 @@ use noodles::sam::alignment::record::data::field::tag::Tag;
 use polars::prelude::*;
 use rust_lapper::Interval;
 use rust_lapper::Lapper;
-use std::io::Write;
+use std::io::{BufRead, Write};
 use std::ops::Bound;
 use std::path::{Path, PathBuf};
 
@@ -431,6 +431,8 @@ impl FileType {
     }
 }
 
+
+
 pub fn regions_to_lapper(regions: Vec<Region>) -> Result<HashMap<String, Lapper<usize, u32>>> {
     let mut lapper: HashMap<String, Lapper<usize, u32>> = HashMap::default();
     let mut intervals: HashMap<String, Vec<Iv>> = HashMap::default();
@@ -470,6 +472,45 @@ pub fn regions_to_lapper(regions: Vec<Region>) -> Result<HashMap<String, Lapper<
 
     Ok(lapper)
 }
+
+
+pub fn bed_to_lapper(bed: PathBuf) -> Result<HashMap<String, Lapper<usize, u32>>> {
+    // Read the bed file
+    let mut reader = std::fs::File::open(bed)?;
+    let mut buf_reader = std::io::BufReader::new(reader);
+    let mut line = String::new();
+    let mut lapper: HashMap<String, Lapper<usize, u32>> = HashMap::default();
+
+    while buf_reader.read_line(&mut line)? > 0 {
+        let fields: Vec<&str> = line.trim().split('\t').collect();
+        if fields.len() < 3 {
+            warn!("Skipping line: {}. It has < 3 fields", line);
+            continue;
+        }
+        let chrom = fields[0].to_string();
+        let start: usize = fields[1].parse()?;
+        let end: usize = fields[2].parse()?;
+
+        let iv = Iv {
+            start: start.into(),
+            stop: end.into(),
+            val: 0 as u32,
+        };
+
+        lapper
+            .entry(chrom.clone())
+            .or_insert(Lapper::new(Vec::new()))
+            .insert(iv);
+    }
+
+    Ok(lapper)
+}
+
+
+
+
+
+
 
 /// Get the header of a BAM file
 /// If the noodles crate fails to read the header, we fall back to samtools
