@@ -1,5 +1,5 @@
 use ahash::{HashMap, HashSet};
-use anyhow::Result;
+use anyhow::{Context, Result};
 use noodles::sam;
 use noodles::sam::alignment::record::data::field::tag::Tag;
 use noodles::sam::alignment::record::data::field::Value;
@@ -24,6 +24,8 @@ pub struct BamReadFilterStats {
     n_failed_blacklist: AtomicU64,
     // Number of reads filtered by barcode
     n_failed_barcode: AtomicU64,
+    // Number of reads not in read group
+    n_not_in_read_group: AtomicU64,
 }
 
 impl BamReadFilterStats {
@@ -35,6 +37,7 @@ impl BamReadFilterStats {
             n_failed_length: AtomicU64::new(0),
             n_failed_blacklist: AtomicU64::new(0),
             n_failed_barcode: AtomicU64::new(0),
+            n_not_in_read_group: AtomicU64::new(0),
         }
     }
 
@@ -46,6 +49,7 @@ impl BamReadFilterStats {
             n_failed_length: self.n_failed_length.load(Ordering::Relaxed),
             n_failed_blacklist: self.n_failed_blacklist.load(Ordering::Relaxed),
             n_failed_barcode: self.n_failed_barcode.load(Ordering::Relaxed),
+            n_not_in_read_group: self.n_not_in_read_group.load(Ordering::Relaxed),
         }
     }
 }
@@ -58,6 +62,7 @@ pub struct BamReadFilterStatsSnapshot {
     n_failed_length: u64,
     n_failed_blacklist: u64,
     n_failed_barcode: u64,
+    n_not_in_read_group: u64,
 }
 
 impl Display for BamReadFilterStatsSnapshot {
@@ -69,6 +74,8 @@ impl Display for BamReadFilterStatsSnapshot {
         writeln!(f, "Failed length: {}", self.n_failed_length)?;
         writeln!(f, "Failed blacklist: {}", self.n_failed_blacklist)?;
         writeln!(f, "Failed barcode: {}", self.n_failed_barcode)?;
+        writeln!(f, "Not in read group: {}", self.n_not_in_read_group)?;
+        writeln!(f, "Filtered reads: {}", self.n_failed_proper_pair + self.n_failed_mapq + self.n_failed_length + self.n_failed_blacklist + self.n_failed_barcode + self.n_not_in_read_group)?;
         Ok(())
     }
 }
@@ -90,6 +97,8 @@ pub struct BamReadFilter {
     blacklisted_locations: Option<HashMap<usize, Lapper<usize, i32>>>,
     // Whitelisted barcodes (cell barcodes to keep)
     whitelisted_barcodes: Option<HashSet<String>>,
+    // Read group to keep
+    read_group: Option<String>,
     // Statistics for the filtering process
     stats: Arc<BamReadFilterStats>,
 }
@@ -136,6 +145,7 @@ impl BamReadFilter {
         min_mapq: Option<u8>,
         min_length: Option<u32>,
         max_length: Option<u32>,
+        read_group: Option<String>,
         blacklisted_locations: Option<HashMap<usize, Lapper<usize, i32>>>,
         whitelisted_barcodes: Option<HashSet<String>>,
     ) -> Self {
@@ -150,6 +160,7 @@ impl BamReadFilter {
             max_length,
             blacklisted_locations,
             whitelisted_barcodes,
+            read_group,
             stats: Arc::new(BamReadFilterStats::new()),
         }
     }
@@ -248,6 +259,29 @@ impl BamReadFilter {
                 }
             }
         }
+
+        // Filter by read group.
+        if let Some(read_group) = &self.read_group {
+
+            let rg = noodles::sam::alignment::record::data::field::tag::Tag::READ_GROUP;
+            let data = alignment.data();
+            let read_group_value = data.get(&rg).context("Failed to get read group")??;
+            
+            match read_group_value {
+                Value::String(value) => {
+                    if value != read_group {
+                        self.stats.n_not_in_read_group.fetch_add(1, Ordering::Relaxed);
+                        return Ok(false);
+                    }
+                }
+                _ => {
+                    self.stats.n_not_in_read_group.fetch_add(1, Ordering::Relaxed);
+                    return Ok(false);
+                }
+            }
+
+        }
+
         Ok(true)
     }
 

@@ -73,13 +73,17 @@ struct FilterOptions {
     #[arg(long, required = false, default_value = "1000")]
     max_length: u32,
 
-    /// Blacklisted locations in BED format
+    /// Blacklisted locations in BED format -- WORK IN PROGRESS
     #[arg(long, required = false)]
     blacklisted_locations: Option<PathBuf>,
 
     /// Whitelisted barcodes in a text file (one barcode per line)
     #[arg(long, required = false)]
     whitelisted_barcodes: Option<PathBuf>,
+
+    /// Selected read group
+    #[arg(long, required = false)]
+    read_group: Option<String>,
 }
 
 #[derive(Parser)]
@@ -200,6 +204,13 @@ fn main() {
     colog::init();
 
     let cli = Cli::parse();
+    let log_level = match cli.verbose {
+        0 => log::LevelFilter::Error,
+        1 => log::LevelFilter::Warn,
+        2 => log::LevelFilter::Info,
+        3 => log::LevelFilter::Debug,
+        _ => log::LevelFilter::Trace,
+    };
 
     match &cli.command {
         Commands::BamCoverage {
@@ -232,9 +243,11 @@ fn main() {
                 Some(filter_options.min_mapq),
                 Some(filter_options.min_length),
                 Some(filter_options.max_length),
+                filter_options.read_group.clone(),
                 None,
                 whitelisted_barcodes,
             );
+
             let coverage = pileup::BamPileup::new(
                 bam.clone(),
                 bin_size.unwrap_or(50),
@@ -279,8 +292,6 @@ fn main() {
             let result = match output_type {
                 Some(FileType::Bedgraph) => coverage.to_bedgraph(outfile),
                 Some(FileType::Bigwig) => {
-                    // Check that bedGraphToBigWig is in the PATH
-
                     // Check if the bedGraphToBigWig tool is in the PATH
                     let bdg_to_bw = std::process::Command::new("bedGraphToBigWig").output();
                     match bdg_to_bw {
@@ -357,6 +368,7 @@ fn main() {
                                 Some(filter_options.min_mapq),
                                 Some(filter_options.min_length),
                                 Some(filter_options.max_length),
+                                filter_options.read_group.clone(),
                                 None,
                                 Some(bc),
                             );
@@ -372,6 +384,7 @@ fn main() {
                             Some(filter_options.min_mapq),
                             Some(filter_options.min_length),
                             Some(filter_options.max_length),
+                            filter_options.read_group.clone(),
                             None,
                             None,
                         );
@@ -429,8 +442,7 @@ fn main() {
             };
 
             
-            match result.context("Failed to write output")
-            {
+            match result.context("Failed to write output") {
                 Ok(_) => {
                     info!("Successfully wrote output");
                 }
@@ -439,7 +451,6 @@ fn main() {
                     exit(1);
                 }
             }
-
         }
         Commands::SplitExogenous {
             input,
@@ -449,13 +460,34 @@ fn main() {
             allow_unknown_mapq,
             filter_options,
         } => {
+            let whitelisted_barcodes = match &filter_options.whitelisted_barcodes {
+                Some(whitelist) => {
+                    let barcodes =
+                        utils::CellBarcodes::from_csv(whitelist).expect("Failed to read barcodes");
+                    Some(barcodes.barcodes())
+                }
+                None => None,
+            };
+
+            let filter = filter::BamReadFilter::new(
+                filter_options.proper_pair,
+                Some(filter_options.min_mapq),
+                Some(filter_options.min_length),
+                Some(filter_options.max_length),
+                filter_options.read_group.clone(),
+                None,
+                whitelisted_barcodes,
+            );
+
             let mut split = spikein::BamSplitter::new(
                 input.to_path_buf(),
                 output.to_path_buf(),
                 exogenous_prefix.to_string(),
                 *allow_unknown_mapq,
+                filter,
             )
             .expect("Failed to create BamSplitter");
+            
             match split.split() {
                 Ok(_) => {
                     info!("Successfully split BAM file");
@@ -500,6 +532,7 @@ fn main() {
                 Some(filter_options.min_mapq),
                 Some(filter_options.min_length),
                 Some(filter_options.max_length),
+                filter_options.read_group.clone(),
                 None,
                 whitelisted_barcodes,
             );
