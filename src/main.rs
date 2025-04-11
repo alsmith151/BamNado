@@ -232,6 +232,15 @@ fn create_filter_from_options(
                 .context("Failed to read blacklisted locations")?;
             let lapper = utils::lapper_chrom_name_to_lapper_chrom_id(lapper, stats)
                 .context("Failed to convert chrom names to chrom ids")?;
+
+            // Merge overlapping intervals
+            let lapper = lapper.into_iter()
+                .map(|(chrom, mut intervals)| {
+                    intervals.merge_overlaps();
+                    (chrom, intervals)
+                })
+                .collect();
+
             Some(lapper)
         }
         (Some(blacklist), None) => {
@@ -239,6 +248,8 @@ fn create_filter_from_options(
         }
         _ => None,
     };
+
+    println!("Blacklisted locations: {:?}", blacklisted_locations);
 
     Ok(filter::BamReadFilter::new(
         filter_options.proper_pair,
@@ -305,6 +316,7 @@ fn main() -> Result<()> {
 
             // Create filter
             let filter = create_filter_from_options(filter_options, Some(&bam_stats))?;
+
 
             // Create pileup
             let coverage = pileup::BamPileup::new(
