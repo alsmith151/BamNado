@@ -115,7 +115,7 @@ impl Display for BamReadFilter {
                 writeln!(
                     f,
                     "\tNumber of Blacklisted locations: {}",
-                    blacklisted_locations.len()
+                    blacklisted_locations.iter().map(|(_, v)| v.len()).sum::<usize>()
                 )?;
             }
             None => {
