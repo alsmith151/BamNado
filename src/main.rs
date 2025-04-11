@@ -1,12 +1,11 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use log::{error, info};
-use std::process::exit;
 use std::{
     io::Write,
     path::{Path, PathBuf},
 };
-
+use utils::BamStats;
 
 mod filter;
 mod intervals;
@@ -87,6 +86,26 @@ struct FilterOptions {
     read_group: Option<String>,
 }
 
+// Common coverage options for both single and multi-BAM operations
+#[derive(Parser, Clone)]
+struct CoverageOptions {
+    /// Bin size for coverage calculation
+    #[arg(short = 's', long)]
+    bin_size: Option<u64>,
+
+    /// Normalization method to use
+    #[arg(short, long, default_value = "raw")]
+    norm_method: Option<utils::NormalizationMethod>,
+
+    /// Scaling factor for the pileup
+    #[arg(short = 'f', long)]
+    scale_factor: Option<f32>,
+
+    /// Use the fragment or the read for counting
+    #[arg(long, action = clap::ArgAction::SetTrue)]
+    use_fragment: bool,
+}
+
 #[derive(Parser)]
 #[command(author, version, about, long_about = None, styles=get_styles())]
 struct Cli {
@@ -110,21 +129,8 @@ enum Commands {
         #[arg(short, long)]
         output: Option<PathBuf>,
 
-        /// Bin size for coverage calculation
-        #[arg(short = 's', long)]
-        bin_size: Option<u64>,
-
-        /// Normalization method to use
-        #[arg(short, long, default_value = "raw")]
-        norm_method: Option<utils::NormalizationMethod>,
-
-        /// Scaling factor for the pileup
-        #[arg(short = 'f', long)]
-        scale_factor: Option<f32>,
-
-        /// Use the fragment or the read for counting
-        #[arg(long, action = clap::ArgAction::SetTrue)]
-        use_fragment: bool,
+        #[command(flatten)]
+        coverage_options: CoverageOptions,
 
         #[command(flatten)]
         filter_options: FilterOptions,
@@ -140,22 +146,9 @@ enum Commands {
         #[arg(short, long)]
         output: Option<PathBuf>,
 
-        /// Bin size for coverage calculation
-        #[arg(short = 's', long)]
-        bin_size: Option<u64>,
+        #[command(flatten)]
+        coverage_options: CoverageOptions,
 
-        /// Normalization method to use
-        #[arg(short, long, default_value = "raw")]
-        norm_method: Option<utils::NormalizationMethod>,
-
-        /// Scaling factor for the pileup
-        #[arg(short = 'f', long)]
-        scale_factor: Option<f32>,
-
-        /// Use the fragment or the read for counting
-        #[arg(long, action = clap::ArgAction::SetTrue)]
-        use_fragment: bool,
-        
         #[command(flatten)]
         filter_options: FilterOptions,
     },
@@ -181,7 +174,7 @@ enum Commands {
         /// Allow unknown MAPQ values - useful for BAM files with MAPQ=255 i.e. STAR generated BAM files
         #[arg(long, action = clap::ArgAction::SetTrue)]
         allow_unknown_mapq: bool,
-        
+
         #[command(flatten)]
         filter_options: FilterOptions,
     },
@@ -195,13 +188,105 @@ enum Commands {
         /// Output prefix
         #[arg(short, long)]
         output: PathBuf,
-        
+
         #[command(flatten)]
         filter_options: FilterOptions,
     },
 }
 
-fn main() {
+// Helper functions to reduce code duplication
+fn validate_bam_file(bam_path: &Path) -> Result<()> {
+    if !bam_path.exists() {
+        return Err(anyhow::anyhow!("BAM file does not exist: {}", bam_path.display()));
+    }
+    
+    let index_path = bam_path.with_extension("bam.bai");
+    if !index_path.exists() {
+        return Err(anyhow::anyhow!(
+            "BAM index file does not exist for {}. Please create the index file using samtools index command", 
+            bam_path.display()
+        ));
+    }
+    
+    Ok(())
+}
+
+fn create_filter_from_options(
+    filter_options: &FilterOptions, 
+    bam_stats: Option<&BamStats>
+) -> Result<filter::BamReadFilter> {
+    // Process whitelisted barcodes
+    let whitelisted_barcodes = match &filter_options.whitelisted_barcodes {
+        Some(whitelist) => {
+            let barcodes = utils::CellBarcodes::from_csv(whitelist)
+                .context("Failed to read barcodes")?;
+            Some(barcodes.barcodes())
+        }
+        None => None,
+    };
+
+    // Process blacklisted locations
+    let blacklisted_locations = match (&filter_options.blacklisted_locations, bam_stats) {
+        (Some(blacklist), Some(stats)) => {
+            let lapper = utils::bed_to_lapper(blacklist.clone())
+                .context("Failed to read blacklisted locations")?;
+            let lapper = utils::lapper_chrom_name_to_lapper_chrom_id(lapper, stats)
+                .context("Failed to convert chrom names to chrom ids")?;
+
+            // Merge overlapping intervals
+            let lapper = lapper.into_iter()
+                .map(|(chrom, mut intervals)| {
+                    intervals.merge_overlaps();
+                    (chrom, intervals)
+                })
+                .collect();
+
+            Some(lapper)
+        }
+        (Some(blacklist), None) => {
+            panic!("Blacklisted locations provided but no BAM stats available");
+        }
+        _ => None,
+    };
+
+    println!("Blacklisted locations: {:?}", blacklisted_locations);
+
+    Ok(filter::BamReadFilter::new(
+        filter_options.proper_pair,
+        Some(filter_options.min_mapq),
+        Some(filter_options.min_length),
+        Some(filter_options.max_length),
+        filter_options.read_group.clone(),
+        blacklisted_locations,
+        whitelisted_barcodes,
+    ))
+}
+
+fn process_output_file_type(output: &PathBuf) -> Result<FileType> {
+    match output.extension() {
+        Some(ext) => match ext.to_str() {
+            Some(ext) => FileType::from_str(ext)
+                .map_err(anyhow::Error::msg)
+                .context(format!("Unsupported file extension: {}", ext)),
+            None => Err(anyhow::anyhow!("Could not determine file type from extension"))
+        },
+        None => Err(anyhow::anyhow!("No file extension found"))
+    }
+}
+
+fn check_bedgraph_to_bigwig_tool() -> Result<()> {
+    match std::process::Command::new("bedGraphToBigWig").output() {
+        Ok(_) => {
+            info!("bedGraphToBigWig tool found in PATH");
+            Ok(())
+        }
+        Err(_) => {
+            Err(anyhow::anyhow!("bedGraphToBigWig tool not found in PATH. Please install the tool and try again"))
+        }
+    }
+}
+
+fn main() -> Result<()> {
     colog::init();
 
     let cli = Cli::parse();
@@ -212,63 +297,39 @@ fn main() {
         3 => log::LevelFilter::Debug,
         _ => log::LevelFilter::Trace,
     };
+    
+    // Set log level (missing implementation to use log_level)
 
     match &cli.command {
         Commands::BamCoverage {
             bam,
             output,
-            bin_size,
-            norm_method,
-            scale_factor,
-            use_fragment,
+            coverage_options,
             filter_options,
         } => {
-            if !bam.exists() {
-                error!("BAM file does not exist");
-                exit(1);
-            } else if !bam.with_extension("bam.bai").exists() {
-                error!("BAM index file does not exist. Please create the index file using samtools index command");
-            }
+            // Validate BAM file
+            validate_bam_file(bam)?;
 
-            let whitelisted_barcodes = match &filter_options.whitelisted_barcodes {
-                Some(whitelist) => {
-                    let barcodes =
-                        utils::CellBarcodes::from_csv(whitelist).expect("Failed to read barcodes");
-                    Some(barcodes.barcodes())
-                }
-                None => None,
-            };
+            // Get the BAM stats
+            let bam_stats = BamStats::new(bam.clone())
+                .context("Failed to read BAM stats")?;
 
-            let blacklisted_locations = match &filter_options.blacklisted_locations {
-                Some(blacklist) => {
-                    Some(utils::bed_to_lapper(blacklist.clone()).expect("Failed to read blacklisted locations"))
-                }
-                None => None,
-            };
+            // Create filter
+            let filter = create_filter_from_options(filter_options, Some(&bam_stats))?;
 
 
-            let filter = filter::BamReadFilter::new(
-                filter_options.proper_pair,
-                Some(filter_options.min_mapq),
-                Some(filter_options.min_length),
-                Some(filter_options.max_length),
-                filter_options.read_group.clone(),
-                blacklisted_locations,
-                whitelisted_barcodes,
-            );
-
+            // Create pileup
             let coverage = pileup::BamPileup::new(
                 bam.clone(),
-                bin_size.unwrap_or(50),
-                norm_method
-                    .clone()
-                    .unwrap_or(utils::NormalizationMethod::Raw),
-                scale_factor.unwrap_or(1.0),
-                *use_fragment,
+                coverage_options.bin_size.unwrap_or(50),
+                coverage_options.norm_method.clone().unwrap_or(utils::NormalizationMethod::Raw),
+                coverage_options.scale_factor.unwrap_or(1.0),
+                coverage_options.use_fragment,
                 filter,
                 true,
             );
 
+            // Determine output file
             let outfile = match output {
                 Some(output) => output.clone(),
                 None => {
@@ -278,197 +339,123 @@ fn main() {
                 }
             };
 
-            let output_type = match outfile.extension() {
-                Some(ext) => match ext.to_str() {
-                    Some(ext) => match FileType::from_str(ext) {
-                        Ok(file_type) => Some(file_type),
-                        Err(e) => {
-                            error!("{}", e);
-                            None
-                        }
-                    },
-                    None => {
-                        error!("Could not determine file type from extension");
-                        None
-                    }
-                },
-                None => {
-                    error!("Could not determine file type from extension");
-                    None
+            // Process output based on file type
+            let output_type = process_output_file_type(&outfile)?;
+            
+            match output_type {
+                FileType::Bedgraph => {
+                    coverage.to_bedgraph(outfile)
+                        .context("Failed to write bedgraph output")?;
                 }
-            };
-
-            let result = match output_type {
-                Some(FileType::Bedgraph) => coverage.to_bedgraph(outfile),
-                Some(FileType::Bigwig) => {
-                    // Check if the bedGraphToBigWig tool is in the PATH
-                    let bdg_to_bw = std::process::Command::new("bedGraphToBigWig").output();
-                    match bdg_to_bw {
-                        std::result::Result::Ok(_) => {
-                            log::info!("bedGraphToBigWig tool found in PATH");
-                        }
-                        Err(_) => {
-                            log::error!("bedGraphToBigWig tool not found in PATH. Please install the tool and try again");
-                            std::process::exit(1);
-                        }
-                    };
-
+                FileType::Bigwig => {
+                    check_bedgraph_to_bigwig_tool()?;
                     coverage.to_bigwig(outfile)
+                        .context("Failed to write bigwig output")?;
                 }
-                Some(FileType::TSV) => {
-                    error!("TSV output is not supported for single BAM coverage");
-                    exit(1);
-                }
-                None => {
-                    exit(1);
-                }
-            };
-
-            match result {
-                Ok(_) => {
-                    info!("Successfully wrote output");
-                }
-                Err(e) => {
-                    error!("Error writing output: {}", e);
-                    exit(1);
+                FileType::TSV => {
+                    return Err(anyhow::anyhow!("TSV output is not supported for single BAM coverage"));
                 }
             }
+
+            info!("Successfully wrote output");
         }
 
         Commands::MultiBamCoverage {
             bams,
             output,
-            bin_size,
-            norm_method,
-            scale_factor,
-            use_fragment,
+            coverage_options,
             filter_options,
         } => {
-            let bam_files: Vec<&Path> = bams.iter().map(|x| x.as_path()).collect();
-
-            // Check if all BAM files exist
-            for bam in &bam_files {
-                if !bam.exists() {
-                    error!("BAM file does not exist");
-                    exit(1);
-                } else if !bam.with_extension("bam.bai").exists() {
-                    error!("BAM index file does not exist. Please create the index file using samtools index command");
-                }
+            // Validate all BAM files
+            for bam in bams {
+                validate_bam_file(bam)?;
             }
 
+            // Determine output file
             let output = output.clone().unwrap_or_else(|| {
                 let mut output = PathBuf::new();
                 output.push("output");
-                output.set_extension("bedgraph");
+                output.set_extension("tsv");
                 output
             });
 
-            let bam_filters: Vec<filter::BamReadFilter> = match &filter_options.whitelisted_barcodes {
+            // Get whitelisted barcodes for all BAMs
+            let whitelisted_barcodes = match &filter_options.whitelisted_barcodes {
                 Some(whitelist) => {
                     let barcodes = utils::CellBarcodesMulti::from_csv(whitelist)
-                        .expect("Failed to read barcodes");
-                
-                    let blacklist_regions = match &filter_options.blacklisted_locations {
-                        Some(blacklist) => {
-                            Some(utils::bed_to_lapper(blacklist.clone()).expect("Failed to read blacklisted locations"))
-                        }
-                        None => None,
-                    };
-
-
-                    bam_files
-                        .iter()
-                        .zip(barcodes.barcodes())
-                        .map(|(bam, bc)| {
-                            let filter = filter::BamReadFilter::new(
-                                filter_options.proper_pair,
-                                Some(filter_options.min_mapq),
-                                Some(filter_options.min_length),
-                                Some(filter_options.max_length),
-                                filter_options.read_group.clone(),
-                                blacklist_regions.clone(),
-                                Some(bc),
-                            );
-                            filter
-                        })
-                        .collect()
+                        .context("Failed to read barcodes")?;
+                    Some(barcodes.barcodes())
                 }
-                None => bam_files
-                    .iter()
-                    .map(|bam| {
-                        let filter = filter::BamReadFilter::new(
-                            filter_options.proper_pair,
-                            Some(filter_options.min_mapq),
-                            Some(filter_options.min_length),
-                            Some(filter_options.max_length),
-                            filter_options.read_group.clone(),
-                            None,
-                            None,
-                        );
-                        filter
-                    })
-                    .collect(),
+                None => None,
             };
 
-            let pileups: Vec<_> = bam_files
-                .iter()
-                .zip(bam_filters.iter())
-                .map(|(bam, filter)| {
-                    pileup::BamPileup::new(
-                        bam.to_path_buf(),
-                        bin_size.unwrap_or(50),
-                        norm_method
-                            .clone()
-                            .unwrap_or(utils::NormalizationMethod::Raw),
-                        scale_factor.unwrap_or(1.0),
-                        *use_fragment,
-                        filter.clone(),
-                        false,
-                    )
-                })
-                .collect();
+            // Create filters and pileups for each BAM file
+            let mut pileups = Vec::new();
+            for (index, bam) in bams.iter().enumerate() {
+                // Get BAM stats
+                let bam_stats = BamStats::new(bam.clone())
+                    .context("Failed to read BAM stats")?;
 
+                // Process blacklisted locations
+                let blacklisted_locations = match &filter_options.blacklisted_locations {
+                    Some(blacklist) => {
+                        let lapper = utils::bed_to_lapper(blacklist.clone())
+                            .context("Failed to read blacklisted locations")?;
+                        let lapper = utils::lapper_chrom_name_to_lapper_chrom_id(lapper, &bam_stats)
+                            .context("Failed to convert chrom names to chrom ids")?;
+                        Some(lapper)
+                    }
+                    None => None,
+                };
+
+                // Get specific whitelisted barcodes for this BAM
+                let bam_barcodes = match &whitelisted_barcodes {
+                    Some(whitelist) => Some(whitelist[index].clone()),
+                    None => None,
+                };
+
+                // Create filter
+                let filter = filter::BamReadFilter::new(
+                    filter_options.proper_pair,
+                    Some(filter_options.min_mapq),
+                    Some(filter_options.min_length),
+                    Some(filter_options.max_length),
+                    filter_options.read_group.clone(),
+                    blacklisted_locations,
+                    bam_barcodes,
+                );
+
+                // Create pileup
+                pileups.push(pileup::BamPileup::new(
+                    bam.clone(),
+                    coverage_options.bin_size.unwrap_or(50),
+                    coverage_options.norm_method.clone().unwrap_or(utils::NormalizationMethod::Raw),
+                    coverage_options.scale_factor.unwrap_or(1.0),
+                    coverage_options.use_fragment,
+                    filter,
+                    false,
+                ));
+            }
+
+            // Create multi-BAM pileup
             let coverage = pileup::MultiBamPileup::new(pileups);
 
-            let output_type = match output.extension() {
-                Some(ext) => match ext.to_str() {
-                    Some(ext) => match FileType::from_str(ext) {
-                        Ok(file_type) => Some(file_type),
-                        Err(e) => {
-                            error!("{}", e);
-                            None
-                        }
-                    },
-                    None => {
-                        error!("Could not determine file type from extension");
-                        None
-                    }
-                },
-                None => {
-                    error!("Could not determine file type from extension");
-                    None
-                }
-            };
-
-            let result = match output_type {
-                Some(FileType::TSV) => coverage.to_tsv(&output),
-                _ => {
-                    error!("Unsupported output format. Currently only TSV is supported");
-                    exit(1);
-                }
-            };
-
+            // Process output based on file type
+            let output_type = process_output_file_type(&output)?;
             
-            match result.context("Failed to write output") {
-                Ok(_) => {
-                    info!("Successfully wrote output");
+            match output_type {
+                FileType::TSV => {
+                    coverage.to_tsv(&output)
+                        .context("Failed to write TSV output")?;
                 }
-                Err(e) => {
-                    error!("Error writing output: {}", e);
-                    exit(1);
+                _ => {
+                    return Err(anyhow::anyhow!("Unsupported output format. Currently only TSV is supported for multi-BAM coverage"));
                 }
             }
+
+            info!("Successfully wrote output");
         }
+
         Commands::SplitExogenous {
             input,
             output,
@@ -477,105 +464,72 @@ fn main() {
             allow_unknown_mapq,
             filter_options,
         } => {
-            let whitelisted_barcodes = match &filter_options.whitelisted_barcodes {
-                Some(whitelist) => {
-                    let barcodes =
-                        utils::CellBarcodes::from_csv(whitelist).expect("Failed to read barcodes");
-                    Some(barcodes.barcodes())
-                }
-                None => None,
-            };
+            // Validate input BAM file
+            validate_bam_file(input)?;
 
-            let blacklisted_locations = match &filter_options.blacklisted_locations {
-                Some(blacklist) => {
-                    Some(utils::bed_to_lapper(blacklist.clone()).expect("Failed to read blacklisted locations"))
-                }
-                None => None,
-            };
+            // Create filter
+            let filter = create_filter_from_options(filter_options, None)?;
 
-            let filter = filter::BamReadFilter::new(
-                filter_options.proper_pair,
-                Some(filter_options.min_mapq),
-                Some(filter_options.min_length),
-                Some(filter_options.max_length),
-                filter_options.read_group.clone(),
-                blacklisted_locations.clone(),
-                whitelisted_barcodes,
-            );
-
+            // Create and run BAM splitter
             let mut split = spikein::BamSplitter::new(
-                input.to_path_buf(),
-                output.to_path_buf(),
-                exogenous_prefix.to_string(),
+                input.clone(),
+                output.clone(),
+                exogenous_prefix.clone(),
                 *allow_unknown_mapq,
-            )
-            .expect("Failed to create BamSplitter");
-            
-            match split.split() {
-                Ok(_) => {
-                    info!("Successfully split BAM file");
+            ).context("Failed to create BamSplitter")?;
 
-                    if stats.is_none() {
-                        return;
-                    } else {
-                        let stats = stats.as_ref().unwrap();
-                        let split_stats = split.stats();
-                        let json =
-                            serde_json::to_string(&split_stats).expect("Failed to serialize stats");
-                        let mut stats_file =
-                            std::fs::File::create(stats).expect("Failed to create stats file");
-                        stats_file
-                            .write_all(json.as_bytes())
-                            .expect("Failed to write stats file");
-                        info!("Successfully wrote stats file to {}", stats.display());
-                    }
-                }
-                Err(e) => {
-                    error!("Error splitting BAM file: {}", e);
-                    exit(1);
-                }
+            split.split()
+                .context("Failed to split BAM file")?;
+
+            info!("Successfully split BAM file");
+
+            // Write stats if requested
+            if let Some(stats_path) = stats {
+                let split_stats = split.stats();
+                let json = serde_json::to_string(&split_stats)
+                    .context("Failed to serialize stats")?;
+                
+                let mut stats_file = std::fs::File::create(stats_path)
+                    .context("Failed to create stats file")?;
+                
+                stats_file.write_all(json.as_bytes())
+                    .context("Failed to write stats file")?;
+                
+                info!("Successfully wrote stats file to {}", stats_path.display());
             }
         }
-        Commands::Split { 
-            input, 
+
+        Commands::Split {
+            input,
             output,
             filter_options,
         } => {
-            let whitelisted_barcodes = match &filter_options.whitelisted_barcodes {
-                Some(whitelist) => {
-                    let barcodes =
-                        utils::CellBarcodes::from_csv(whitelist).expect("Failed to read barcodes");
-                    Some(barcodes.barcodes())
-                }
-                None => None,
-            };
+            // Validate input BAM file
+            validate_bam_file(input)?;
 
-            let blacklisted_locations = match &filter_options.blacklisted_locations {
-                Some(blacklist) => {
-                    Some(utils::bed_to_lapper(blacklist.clone()).expect("Failed to read blacklisted locations"))
-                }
-                None => None,
-            };
+            // Create filter
+            let filter = create_filter_from_options(filter_options, None)?;
 
-            let filter = filter::BamReadFilter::new(
-                filter_options.proper_pair,
-                Some(filter_options.min_mapq),
-                Some(filter_options.min_length),
-                Some(filter_options.max_length),
-                filter_options.read_group.clone(),
-                blacklisted_locations,
-                whitelisted_barcodes,
+            // Create BAM splitter
+            let split = split::BamSplitter::new(
+                input.clone(),
+                output.clone(),
+                filter,
             );
 
-            let split = split::BamSplitter::new(input.to_path_buf(), output.to_path_buf(), filter);
-
+            // Run splitter asynchronously
             let rt = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
-                .unwrap();
+                .context("Failed to build Tokio runtime")?;
 
             let split_future = split.split_async();
-            rt.block_on(split_future).expect("Failed to split BAM file");
+            rt.block_on(split_future)
+                .context("Failed to split BAM file")?;
+            
+            info!("Successfully split BAM file");
         }
     }
+
+    Ok(())
 }
