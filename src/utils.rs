@@ -358,7 +358,7 @@ impl BamStats {
         Ok(chrom_chunks)
     }
 
-    pub fn ref_id_mapping(&self) -> HashMap<usize, String> {
+    pub fn chromosome_id_to_chromosome_name_mapping(&self) -> HashMap<usize, String> {
         let mut ref_id_mapping = HashMap::default();
         for (i, (name, _)) in self.header.reference_sequences().iter().enumerate() {
             let name = std::str::from_utf8(name)
@@ -368,6 +368,18 @@ impl BamStats {
             ref_id_mapping.insert(i, name);
         }
         ref_id_mapping
+    }
+
+    pub fn chromosome_name_to_id_mapping(&self) -> Result<HashMap<String, usize>> {
+        let mut mapping = HashMap::default();
+        let id_to_name = self.chromosome_id_to_chromosome_name_mapping();
+
+        // Invert the mapping
+        for (id, name) in id_to_name.iter() {
+            mapping.insert(name.clone(), *id);
+        }
+
+        Ok(mapping)
     }
 
     pub fn chromsizes_ref_id(&self) -> Result<HashMap<usize, u64>> {
@@ -507,6 +519,25 @@ pub fn bed_to_lapper(bed: PathBuf) -> Result<HashMap<String, Lapper<usize, u32>>
 }
 
 
+/// Convert the chromosome names in the lapper to the chromosome IDs in the BAM file
+/// This is useful for when we want to use the lapper with the BAM file
+/// We need to convert the chromosome names in the lapper to the chromosome IDs in the BAM file
+pub fn lapper_chrom_name_to_lapper_chrom_id(
+    lapper: HashMap<String, Lapper<usize, u32>>,
+    bam_stats: &BamStats,
+) -> Result<HashMap<usize, Lapper<usize, u32>>> {
+
+    // Convert the chromosome names in the lapper to the chromosome IDs in the BAM file
+    let chrom_id_mapping = bam_stats.chromosome_name_to_id_mapping()?;
+    let mut lapper_chrom_id: HashMap<usize, Lapper<usize, u32>> = HashMap::default();
+    for (chrom, lap) in lapper.iter() {
+        let chrom_id = chrom_id_mapping
+            .get(chrom)
+            .ok_or_else(|| anyhow::Error::msg(format!("Chromosome {} not found in BAM file", chrom)))?;
+        lapper_chrom_id.insert(*chrom_id, lap.clone());
+    }
+    Ok(lapper_chrom_id)
+}
 
 
 

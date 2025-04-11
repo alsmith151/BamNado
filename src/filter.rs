@@ -93,8 +93,8 @@ pub struct BamReadFilter {
     min_length: u32,
     // Maximum read length
     max_length: u32,
-    // Blacklisted locations (chromosome -> Lapper)
-    blacklisted_locations: Option<HashMap<String, Lapper<usize, u32>>>,
+    // Blacklisted locations (chromosome (reference number) -> Lapper)
+    blacklisted_locations: Option<HashMap<usize, Lapper<usize, u32>>>,
     // Whitelisted barcodes (cell barcodes to keep)
     whitelisted_barcodes: Option<HashSet<String>>,
     // Read group to keep
@@ -146,7 +146,7 @@ impl BamReadFilter {
         min_length: Option<u32>,
         max_length: Option<u32>,
         read_group: Option<String>,
-        blacklisted_locations: Option<HashMap<String, Lapper<usize, u32>>>,
+        blacklisted_locations: Option<HashMap<usize, Lapper<usize, u32>>>,
         whitelisted_barcodes: Option<HashSet<String>>,
     ) -> Self {
         let min_mapq = min_mapq.unwrap_or(0);
@@ -215,15 +215,8 @@ impl BamReadFilter {
         }
 
         let header = header.expect("No header provided");
-
-        let chrom = match alignment.reference_sequence_id(header) {
-            Some(Ok(chrom)) => chrom,
-            _ => {
-                self.stats.n_failed_mapq.fetch_add(1, Ordering::Relaxed);
-                return Ok(false);
-            }
-        };
-
+        let chrom_id = alignment.reference_sequence_id(header).context("Failed to get reference sequence ID")??;
+        
         let start = match alignment.alignment_start() {
             Some(Ok(start)) => start.get(),
             _ => {
@@ -235,7 +228,7 @@ impl BamReadFilter {
 
         // Filter by blacklisted locations.
         if let Some(blacklisted_locations) = &self.blacklisted_locations {
-            if let Some(blacklist) = blacklisted_locations.get(&chrom.to_string()) {
+            if let Some(blacklist) = blacklisted_locations.get(&chrom_id) {
                 if blacklist.count(start, end) > 0 {
                     self.stats.n_failed_blacklist.fetch_add(1, Ordering::Relaxed);
                     return Ok(false);

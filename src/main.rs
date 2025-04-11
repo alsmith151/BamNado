@@ -1,12 +1,13 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use log::{error, info};
+use polars::chunked_array::collect;
 use std::process::exit;
 use std::{
     io::Write,
     path::{Path, PathBuf},
 };
-
+use utils::BamStats;
 
 mod filter;
 mod intervals;
@@ -155,7 +156,7 @@ enum Commands {
         /// Use the fragment or the read for counting
         #[arg(long, action = clap::ArgAction::SetTrue)]
         use_fragment: bool,
-        
+
         #[command(flatten)]
         filter_options: FilterOptions,
     },
@@ -181,7 +182,7 @@ enum Commands {
         /// Allow unknown MAPQ values - useful for BAM files with MAPQ=255 i.e. STAR generated BAM files
         #[arg(long, action = clap::ArgAction::SetTrue)]
         allow_unknown_mapq: bool,
-        
+
         #[command(flatten)]
         filter_options: FilterOptions,
     },
@@ -195,7 +196,7 @@ enum Commands {
         /// Output prefix
         #[arg(short, long)]
         output: PathBuf,
-        
+
         #[command(flatten)]
         filter_options: FilterOptions,
     },
@@ -230,6 +231,9 @@ fn main() {
                 error!("BAM index file does not exist. Please create the index file using samtools index command");
             }
 
+            // Get the BAM stats
+            let bam_stats = BamStats::new(bam.clone()).expect("Failed to read BAM stats");
+
             let whitelisted_barcodes = match &filter_options.whitelisted_barcodes {
                 Some(whitelist) => {
                     let barcodes =
@@ -241,11 +245,14 @@ fn main() {
 
             let blacklisted_locations = match &filter_options.blacklisted_locations {
                 Some(blacklist) => {
-                    Some(utils::bed_to_lapper(blacklist.clone()).expect("Failed to read blacklisted locations"))
+                    let lapper = utils::bed_to_lapper(blacklist.clone())
+                        .expect("Failed to read blacklisted locations");
+                    let lapper = utils::lapper_chrom_name_to_lapper_chrom_id(lapper, &bam_stats)
+                        .expect("Failed to convert chrom names to chrom ids");
+                    Some(lapper)
                 }
                 None => None,
             };
-
 
             let filter = filter::BamReadFilter::new(
                 filter_options.proper_pair,
@@ -363,53 +370,61 @@ fn main() {
                 output
             });
 
-            let bam_filters: Vec<filter::BamReadFilter> = match &filter_options.whitelisted_barcodes {
+            // Get the barcodes from the whitelist
+            let whitelisted_barcodes = match &filter_options.whitelisted_barcodes {
                 Some(whitelist) => {
                     let barcodes = utils::CellBarcodesMulti::from_csv(whitelist)
                         .expect("Failed to read barcodes");
-                
-                    let blacklist_regions = match &filter_options.blacklisted_locations {
+                    Some(barcodes.barcodes())
+                }
+                None => None,
+            };
+
+            let bam_filters: Vec<filter::BamReadFilter> = bam_files
+                .iter()
+                .enumerate()
+                .map(|(index, bam)| {
+                    // Get the BAM stats
+                    let bam_stats =
+                        BamStats::new(bam.clone().to_path_buf()).expect("Failed to read BAM stats");
+
+                    // Get the blacklisted locations
+                    let blacklisted_locations = match &filter_options.blacklisted_locations {
                         Some(blacklist) => {
-                            Some(utils::bed_to_lapper(blacklist.clone()).expect("Failed to read blacklisted locations"))
+                            let lapper = utils::bed_to_lapper(blacklist.clone())
+                                .expect("Failed to read blacklisted locations");
+                            let lapper =
+                                utils::lapper_chrom_name_to_lapper_chrom_id(lapper, &bam_stats)
+                                    .expect("Failed to convert chrom names to chrom ids");
+                            Some(lapper)
                         }
                         None => None,
                     };
 
+                    // Get the whitelisted barcodes
+                    let whitelisted_barcodes = match &whitelisted_barcodes {
+                        Some(whitelist) => {
+                            let barcodes = whitelist[index].clone();
+                            Some(barcodes)
+                        }
+                        None => None,
+                    };
+                    // Create the filter
+                    let filter = filter::BamReadFilter::new(
+                        filter_options.proper_pair,
+                        Some(filter_options.min_mapq),
+                        Some(filter_options.min_length),
+                        Some(filter_options.max_length),
+                        filter_options.read_group.clone(),
+                        blacklisted_locations.clone(),
+                        whitelisted_barcodes,
+                    );
 
-                    bam_files
-                        .iter()
-                        .zip(barcodes.barcodes())
-                        .map(|(bam, bc)| {
-                            let filter = filter::BamReadFilter::new(
-                                filter_options.proper_pair,
-                                Some(filter_options.min_mapq),
-                                Some(filter_options.min_length),
-                                Some(filter_options.max_length),
-                                filter_options.read_group.clone(),
-                                blacklist_regions.clone(),
-                                Some(bc),
-                            );
-                            filter
-                        })
-                        .collect()
-                }
-                None => bam_files
-                    .iter()
-                    .map(|bam| {
-                        let filter = filter::BamReadFilter::new(
-                            filter_options.proper_pair,
-                            Some(filter_options.min_mapq),
-                            Some(filter_options.min_length),
-                            Some(filter_options.max_length),
-                            filter_options.read_group.clone(),
-                            None,
-                            None,
-                        );
-                        filter
-                    })
-                    .collect(),
-            };
+                    filter
+                })
+                .collect();
 
+            // Create the pileup
             let pileups: Vec<_> = bam_files
                 .iter()
                 .zip(bam_filters.iter())
@@ -458,7 +473,6 @@ fn main() {
                 }
             };
 
-            
             match result.context("Failed to write output") {
                 Ok(_) => {
                     info!("Successfully wrote output");
@@ -487,9 +501,10 @@ fn main() {
             };
 
             let blacklisted_locations = match &filter_options.blacklisted_locations {
-                Some(blacklist) => {
-                    Some(utils::bed_to_lapper(blacklist.clone()).expect("Failed to read blacklisted locations"))
-                }
+                Some(blacklist) => Some(
+                    utils::bed_to_lapper(blacklist.clone())
+                        .expect("Failed to read blacklisted locations"),
+                ),
                 None => None,
             };
 
@@ -510,7 +525,7 @@ fn main() {
                 *allow_unknown_mapq,
             )
             .expect("Failed to create BamSplitter");
-            
+
             match split.split() {
                 Ok(_) => {
                     info!("Successfully split BAM file");
@@ -536,8 +551,8 @@ fn main() {
                 }
             }
         }
-        Commands::Split { 
-            input, 
+        Commands::Split {
+            input,
             output,
             filter_options,
         } => {
@@ -551,9 +566,10 @@ fn main() {
             };
 
             let blacklisted_locations = match &filter_options.blacklisted_locations {
-                Some(blacklist) => {
-                    Some(utils::bed_to_lapper(blacklist.clone()).expect("Failed to read blacklisted locations"))
-                }
+                Some(blacklist) => Some(
+                    utils::bed_to_lapper(blacklist.clone())
+                        .expect("Failed to read blacklisted locations"),
+                ),
                 None => None,
             };
 
