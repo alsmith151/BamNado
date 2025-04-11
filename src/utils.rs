@@ -1,11 +1,11 @@
 use ahash::{HashMap, HashSet};
-use anyhow::Result;
+use anyhow::{Context, Result};
 use bio_types::annot::contig::Contig;
 use bio_types::strand::ReqStrand;
 use log::{debug, info, warn};
 
 use noodles::core::{Position, Region};
-use noodles::{bam, sam};
+use noodles::{bam, sam, bed};
 use noodles::sam::alignment::record::data::field::tag::Tag;
 use polars::prelude::*;
 use rust_lapper::Interval;
@@ -358,7 +358,7 @@ impl BamStats {
         Ok(chrom_chunks)
     }
 
-    pub fn ref_id_mapping(&self) -> HashMap<usize, String> {
+    pub fn chromosome_id_to_chromosome_name_mapping(&self) -> HashMap<usize, String> {
         let mut ref_id_mapping = HashMap::default();
         for (i, (name, _)) in self.header.reference_sequences().iter().enumerate() {
             let name = std::str::from_utf8(name)
@@ -368,6 +368,18 @@ impl BamStats {
             ref_id_mapping.insert(i, name);
         }
         ref_id_mapping
+    }
+
+    pub fn chromosome_name_to_id_mapping(&self) -> Result<HashMap<String, usize>> {
+        let mut mapping = HashMap::default();
+        let id_to_name = self.chromosome_id_to_chromosome_name_mapping();
+
+        // Invert the mapping
+        for (id, name) in id_to_name.iter() {
+            mapping.insert(name.clone(), *id);
+        }
+
+        Ok(mapping)
     }
 
     pub fn chromsizes_ref_id(&self) -> Result<HashMap<usize, u64>> {
@@ -475,38 +487,65 @@ pub fn regions_to_lapper(regions: Vec<Region>) -> Result<HashMap<String, Lapper<
 
 
 pub fn bed_to_lapper(bed: PathBuf) -> Result<HashMap<String, Lapper<usize, u32>>> {
-    // Read the bed file
-    let mut reader = std::fs::File::open(bed)?;
+
+    // Read the bed file and convert it to a lapper
+    let reader = std::fs::File::open(bed)?;
     let mut buf_reader = std::io::BufReader::new(reader);
-    let mut line = String::new();
+    let mut bed_reader = bed::Reader::<4, _>::new(buf_reader);
+    let mut record = bed::Record::default();
+    let mut intervals: HashMap<String, Vec<Iv>> = HashMap::default();
     let mut lapper: HashMap<String, Lapper<usize, u32>> = HashMap::default();
 
-    while buf_reader.read_line(&mut line)? > 0 {
-        let fields: Vec<&str> = line.trim().split('\t').collect();
-        if fields.len() < 3 {
-            warn!("Skipping line: {}. It has < 3 fields", line);
-            continue;
-        }
-        let chrom = fields[0].to_string();
-        let start: usize = fields[1].parse()?;
-        let end: usize = fields[2].parse()?;
+
+    while bed_reader.read_record(&mut record)? != 0 {
+        let chrom = record.reference_sequence_name().to_string();
+        let start = record.feature_start()?;
+        let end = record.feature_end().context("Failed to get feature end")??;
 
         let iv = Iv {
             start: start.into(),
             stop: end.into(),
-            val: 0 as u32,
+            val: 0,
         };
-
-        lapper
+        intervals
             .entry(chrom.clone())
-            .or_insert(Lapper::new(Vec::new()))
-            .insert(iv);
+            .or_insert(Vec::new())
+            .push(iv);
     }
+
+    for (chrom, ivs) in intervals.iter() {
+        let lap = Lapper::new(ivs.to_vec());
+        lapper.insert(chrom.clone(), lap);
+    }
+    // Check if the lapper is empty
+    if lapper.is_empty() {
+        return Err(anyhow::Error::msg("Lapper is empty"));
+    }
+    
 
     Ok(lapper)
 }
 
 
+/// Convert the chromosome names in the lapper to the chromosome IDs in the BAM file
+/// This is useful for when we want to use the lapper with the BAM file
+/// We need to convert the chromosome names in the lapper to the chromosome IDs in the BAM file
+pub fn lapper_chrom_name_to_lapper_chrom_id(
+    lapper: HashMap<String, Lapper<usize, u32>>,
+    bam_stats: &BamStats,
+) -> Result<HashMap<usize, Lapper<usize, u32>>> {
+
+    // Convert the chromosome names in the lapper to the chromosome IDs in the BAM file
+    let chrom_id_mapping = bam_stats.chromosome_name_to_id_mapping()?;
+    let mut lapper_chrom_id: HashMap<usize, Lapper<usize, u32>> = HashMap::default();
+    for (chrom, lap) in lapper.iter() {
+        let chrom_id = chrom_id_mapping
+            .get(chrom)
+            .ok_or_else(|| anyhow::Error::msg(format!("Chromosome {} not found in BAM file", chrom)))?;
+        lapper_chrom_id.insert(*chrom_id, lap.clone());
+    }
+    Ok(lapper_chrom_id)
+}
 
 
 
