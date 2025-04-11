@@ -1,11 +1,11 @@
 use ahash::{HashMap, HashSet};
-use anyhow::Result;
+use anyhow::{Context, Result};
 use bio_types::annot::contig::Contig;
 use bio_types::strand::ReqStrand;
 use log::{debug, info, warn};
 
 use noodles::core::{Position, Region};
-use noodles::{bam, sam};
+use noodles::{bam, sam, bed};
 use noodles::sam::alignment::record::data::field::tag::Tag;
 use polars::prelude::*;
 use rust_lapper::Interval;
@@ -487,33 +487,41 @@ pub fn regions_to_lapper(regions: Vec<Region>) -> Result<HashMap<String, Lapper<
 
 
 pub fn bed_to_lapper(bed: PathBuf) -> Result<HashMap<String, Lapper<usize, u32>>> {
-    // Read the bed file
-    let mut reader = std::fs::File::open(bed)?;
+
+    // Read the bed file and convert it to a lapper
+    let reader = std::fs::File::open(bed)?;
     let mut buf_reader = std::io::BufReader::new(reader);
-    let mut line = String::new();
+    let mut bed_reader = bed::Reader::<4, _>::new(buf_reader);
+    let mut record = bed::Record::default();
+    let mut intervals: HashMap<String, Vec<Iv>> = HashMap::default();
     let mut lapper: HashMap<String, Lapper<usize, u32>> = HashMap::default();
 
-    while buf_reader.read_line(&mut line)? > 0 {
-        let fields: Vec<&str> = line.trim().split('\t').collect();
-        if fields.len() < 3 {
-            warn!("Skipping line: {}. It has < 3 fields", line);
-            continue;
-        }
-        let chrom = fields[0].to_string();
-        let start: usize = fields[1].parse()?;
-        let end: usize = fields[2].parse()?;
+
+    while bed_reader.read_record(&mut record)? != 0 {
+        let chrom = record.reference_sequence_name().to_string();
+        let start = record.feature_start()?;
+        let end = record.feature_end().context("Failed to get feature end")??;
 
         let iv = Iv {
             start: start.into(),
             stop: end.into(),
-            val: 0 as u32,
+            val: 0,
         };
-
-        lapper
+        intervals
             .entry(chrom.clone())
-            .or_insert(Lapper::new(Vec::new()))
-            .insert(iv);
+            .or_insert(Vec::new())
+            .push(iv);
     }
+
+    for (chrom, ivs) in intervals.iter() {
+        let lap = Lapper::new(ivs.to_vec());
+        lapper.insert(chrom.clone(), lap);
+    }
+    // Check if the lapper is empty
+    if lapper.is_empty() {
+        return Err(anyhow::Error::msg("Lapper is empty"));
+    }
+    
 
     Ok(lapper)
 }
