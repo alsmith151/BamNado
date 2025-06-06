@@ -13,6 +13,7 @@ mod pileup;
 mod spikein;
 mod split;
 mod utils;
+mod normalization;
 
 use crate::utils::FileType;
 
@@ -95,7 +96,7 @@ struct CoverageOptions {
 
     /// Normalization method to use
     #[arg(short, long, default_value = "raw")]
-    norm_method: Option<utils::NormalizationMethod>,
+    norm_method: Option<normalization::NormalizationMethod>,
 
     /// Scaling factor for the pileup
     #[arg(short = 'f', long)]
@@ -322,7 +323,7 @@ fn main() -> Result<()> {
             let coverage = pileup::BamPileup::new(
                 bam.clone(),
                 coverage_options.bin_size.unwrap_or(50),
-                coverage_options.norm_method.clone().unwrap_or(utils::NormalizationMethod::Raw),
+                coverage_options.norm_method.clone().unwrap_or(normalization::NormalizationMethod::Raw),
                 coverage_options.scale_factor.unwrap_or(1.0),
                 coverage_options.use_fragment,
                 filter,
@@ -429,7 +430,7 @@ fn main() -> Result<()> {
                 pileups.push(pileup::BamPileup::new(
                     bam.clone(),
                     coverage_options.bin_size.unwrap_or(50),
-                    coverage_options.norm_method.clone().unwrap_or(utils::NormalizationMethod::Raw),
+                    coverage_options.norm_method.clone().unwrap_or(normalization::NormalizationMethod::Raw),
                     coverage_options.scale_factor.unwrap_or(1.0),
                     coverage_options.use_fragment,
                     filter,

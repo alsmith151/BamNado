@@ -20,7 +20,8 @@ use tempfile;
 
 use crate::filter::BamReadFilter;
 use crate::intervals::IntervalMaker;
-use crate::utils::{get_bam_header, progress_bar, BamStats, Iv, NormalizationMethod};
+use crate::normalization::NormalizationMethod;
+use crate::utils::{get_bam_header, progress_bar, BamStats, Iv};
 
 /// Write a DataFrame as a bedGraph file (tab-separated, no header).
 fn write_bedgraph(mut df: DataFrame, outfile: PathBuf) -> Result<()> {

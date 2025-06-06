@@ -126,45 +126,6 @@ struct ChromosomeStats {
     unmapped: u64,
 }
 
-#[derive(Debug, Clone, clap::ValueEnum)]
-pub enum NormalizationMethod {
-    Raw,
-    RPKM,
-    CPM,
-}
-
-impl NormalizationMethod {
-    pub fn from_str(s: &str) -> Result<NormalizationMethod> {
-        match s.to_lowercase().as_str() {
-            "raw" => Ok(NormalizationMethod::Raw),
-            "rpkm" => Ok(NormalizationMethod::RPKM),
-            "cpm" => Ok(NormalizationMethod::CPM),
-            _ => {
-                warn!("Unknown normalization method: {}. Defaulting to Raw", s);
-                Ok(NormalizationMethod::Raw)
-            }
-        }
-    }
-
-    pub fn scale_factor(&self, scale_factor: f32, bin_size: u64, n_reads: u64) -> f64 {
-        match self {
-            Self::Raw => 1.0,
-            Self::CPM => {
-                let total_reads = n_reads as f64 / 1e6;
-                let scale_factor = scale_factor as f64 * total_reads;
-                scale_factor
-            }
-            Self::RPKM => {
-                let total_reads = n_reads as f64 / 1e6;
-                let tile_len_kb = (bin_size as f64 / 1000 as f64);
-                let reads_per_tile = total_reads as f64 * tile_len_kb as f64;
-                let reads_per_tile = 1 as f64 / reads_per_tile;
-                let scale_factor = scale_factor as f64 * reads_per_tile;
-                scale_factor
-            }
-        }
-    }
-}
 
 pub fn bam_header(file_path: PathBuf) -> Result<sam::Header> {
     // Read the header of a BAM file
