@@ -105,6 +105,11 @@ struct CoverageOptions {
     /// Use the fragment or the read for counting
     #[arg(long, action = clap::ArgAction::SetTrue)]
     use_fragment: bool,
+
+    /// Ignore scaffold chromosomes
+    #[arg(long, action = clap::ArgAction::SetTrue)]
+    ignore_scaffold: bool,
+
 }
 
 #[derive(Parser)]
@@ -328,6 +333,7 @@ fn main() -> Result<()> {
                 coverage_options.use_fragment,
                 filter,
                 true,
+                coverage_options.ignore_scaffold,
             );
 
             // Determine output file
@@ -434,6 +440,7 @@ fn main() -> Result<()> {
                     coverage_options.use_fragment,
                     filter,
                     false,
+                    coverage_options.ignore_scaffold,
                 ));
             }
 

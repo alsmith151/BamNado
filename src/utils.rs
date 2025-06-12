@@ -1,6 +1,7 @@
 use ahash::{HashMap, HashSet};
 use anyhow::{Context, Result};
 use bio_types::annot::contig::Contig;
+use bio_types::annot::loc::Loc;
 use bio_types::strand::ReqStrand;
 use log::{debug, info, warn};
 
@@ -13,6 +14,7 @@ use rust_lapper::Lapper;
 use std::io::{BufRead, Write};
 use std::ops::Bound;
 use std::path::{Path, PathBuf};
+use regex::Regex;
 
 pub const CB: [u8; 2] = [b'C', b'B'];
 pub type Iv = Interval<usize, u32>;
@@ -216,7 +218,7 @@ impl BamStats {
                 let contig = Contig::new(name, 1, length, ReqStrand::Forward);
                 contig
             })
-            .collect();
+         .collect();
 
         // Get the index of the BAM file
         let bam_reader = bam::io::indexed_reader::Builder::default()
@@ -366,21 +368,38 @@ impl BamStats {
     }
 
     pub fn write_chromsizes(&self, outfile: PathBuf) -> Result<()> {
-        // let chrom_sizes: HashMap<String, u64> = self
-        //     .chrom_stats
-        //     .iter()
-        //     .map(|(name, stats)| (name.to_owned(), stats.length.clone()))
-        //     .collect();
+        // // Write the chromosome sizes to a file
+        // let chrom_sizes = self.chromsizes_ref_name()?;
+        // // Write to the output file
+        // info!("Writing chromosome sizes to {}", outfile.display());
+        // let mut writer = std::io::BufWriter::new(std::fs::File::create(outfile)?);
+
+        // for (chrom, length) in chrom_sizes.iter() {
+        //     writeln!(writer, "{}\t{}", chrom, length)?;
+        // }
+        // Ok(())
+
 
         let chrom_sizes = self.chromsizes_ref_name()?;
+        // Convert the chromosome sizes to a DataFrame
+        let mut df = DataFrame::new(vec![
+            Column::new("chrom".into(), chrom_sizes.keys().cloned().collect::<Vec<String>>()),
+            Column::new("length".into(), chrom_sizes.values().cloned().collect::<Vec<u64>>()),
+        ])?;
 
+        // Sort the DataFrame by chromosome name
+        df.sort_in_place(["chrom"], SortMultipleOptions::default())?;
+
+        // Write the DataFrame to a CSV file
         info!("Writing chromosome sizes to {}", outfile.display());
-        let mut writer = std::io::BufWriter::new(std::fs::File::create(outfile)?);
-
-        for (chrom, length) in chrom_sizes.iter() {
-            writeln!(writer, "{}\t{}", chrom, length)?;
-        }
+        let mut file = std::fs::File::create(outfile)?;
+        CsvWriter::new(&mut file)
+            .include_header(false)
+            .with_separator(b'\t')
+            .finish(&mut df)?;
         Ok(())
+
+
     }
 
     pub fn n_mapped(&self) -> u64 {
