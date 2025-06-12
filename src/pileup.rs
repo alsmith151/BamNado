@@ -27,7 +27,7 @@ use crate::utils::{get_bam_header, progress_bar, BamStats, Iv};
 /// Write a DataFrame as a bedGraph file (tab-separated, no header).
 fn write_bedgraph(mut df: DataFrame, outfile: PathBuf) -> Result<()> {
     // Sort by chromosome and start position.
-    df = df.sort(["chrom", "start"], Default::default())?;
+    df = df.sort(["chrom", "start"], SortMultipleOptions::new().with_order_descending_multi([false, false]))?;
     let mut file = std::fs::File::create(outfile)?;
     CsvWriter::new(&mut file)
         .include_header(false)
