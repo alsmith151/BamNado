@@ -28,4 +28,5 @@ pyo3 = { version = "0.25.0", features = ["extension-module"] }
 anstyle = "1.0.11"
 futures = "*"
 tokio = { version = "1.45.1"}
+regex = "1.10.7"
 # granges = "0.2.2"
