@@ -349,7 +349,6 @@ fn main() -> Result<()> {
                         .context("Failed to write bedgraph output")?;
                 }
                 FileType::Bigwig => {
-                    check_bedgraph_to_bigwig_tool()?;
                     coverage.to_bigwig(outfile)
                         .context("Failed to write bigwig output")?;
                 }

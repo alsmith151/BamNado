@@ -17,6 +17,7 @@ use polars::prelude::*;
 use rayon::prelude::*;
 use rust_lapper::Lapper;
 use tempfile;
+use bigtools::{DEFAULT_BLOCK_SIZE, DEFAULT_ITEMS_PER_SLOT};
 use bigtools::BigWigRead;
 use crate::filter::BamReadFilter;
 use crate::intervals::IntervalMaker;
@@ -26,7 +27,7 @@ use crate::utils::{get_bam_header, progress_bar, BamStats, Iv};
 /// Write a DataFrame as a bedGraph file (tab-separated, no header).
 fn write_bedgraph(mut df: DataFrame, outfile: PathBuf) -> Result<()> {
     // Sort by chromosome and start position.
-    df = df.sort(["chrom", "start"], Default::default())?;
+    df = df.sort(["chrom", "start"], SortMultipleOptions::new().with_order_descending_multi([false, false]))?;
     let mut file = std::fs::File::create(outfile)?;
     CsvWriter::new(&mut file)
         .include_header(false)
@@ -366,6 +367,8 @@ impl BamPileup {
     ///
     /// This function writes a temporary bedGraph file and converts it to BigWig.
     pub fn to_bigwig(&self, outfile: PathBuf) -> Result<()> {
+
+
         let bam_stats = BamStats::new(self.file_path.clone())?;
         let chromsizes_file = tempfile::NamedTempFile::new()?;
         let chromsizes_path = chromsizes_file.path();
@@ -375,8 +378,36 @@ impl BamPileup {
         let bedgraph_path = bedgraph_file.path();
         self.to_bedgraph(bedgraph_path.to_path_buf())?;
 
-        info!("Converting bedGraph to BigWig file");
-        convert_bedgraph_to_bigwig(bedgraph_path, chromsizes_path, &outfile)
+        let args = bigtools::utils::cli::bedgraphtobigwig::BedGraphToBigWigArgs{
+            bedgraph:bedgraph_path.to_path_buf().to_string_lossy().to_string(),
+            chromsizes: chromsizes_path.to_path_buf().to_string_lossy().to_string(),
+            output: outfile.to_string_lossy().to_string(),
+            parallel: "auto".to_string(),
+            single_pass: true,
+            write_args: bigtools::utils::cli::BBIWriteArgs{
+                nthreads: 6,
+                nzooms: 10,
+                uncompressed: false,
+                sorted: "all".to_string(),
+                zooms: None,
+                block_size: DEFAULT_BLOCK_SIZE,
+                items_per_slot: DEFAULT_ITEMS_PER_SLOT,
+                inmemory: false,
+            },
+        };
+
+        let result = bigtools::utils::cli::bedgraphtobigwig::bedgraphtobigwig(args);
+        if let Err(e) = result {
+            error!("Error converting bedGraph to BigWig: {}", e);
+            anyhow::bail!("Conversion to BigWig failed");
+        }
+        // Clean up temporary files.
+        std::fs::remove_file(bedgraph_path)?;
+        std::fs::remove_file(chromsizes_path)?;
+        // Log success.
+        info!("BigWig file successfully written to {}", outfile.display());
+        Ok(())
+        
     }
 }
 

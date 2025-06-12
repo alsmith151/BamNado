@@ -462,7 +462,7 @@ pub fn bed_to_lapper(bed: PathBuf) -> Result<HashMap<String, Lapper<usize, u32>>
     // Read the bed file and convert it to a lapper
     let reader = std::fs::File::open(bed)?;
     let mut buf_reader = std::io::BufReader::new(reader);
-    let mut bed_reader = bed::Reader::<4, _>::new(buf_reader);
+    let mut bed_reader = bed::io::Reader::<4, _>::new(buf_reader);
     let mut record = bed::Record::default();
     let mut intervals: HashMap<String, Vec<Iv>> = HashMap::default();
     let mut lapper: HashMap<String, Lapper<usize, u32>> = HashMap::default();
