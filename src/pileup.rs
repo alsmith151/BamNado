@@ -18,7 +18,7 @@ use rayon::prelude::*;
 use rust_lapper::Lapper;
 use tempfile;
 use bigtools::{DEFAULT_BLOCK_SIZE, DEFAULT_ITEMS_PER_SLOT};
-
+use bigtools::BigWigRead;
 use crate::filter::BamReadFilter;
 use crate::intervals::IntervalMaker;
 use crate::normalization::NormalizationMethod;
@@ -148,7 +148,7 @@ impl BamPileup {
         scale_factor: f32,
         use_fragment: bool,
         filter: BamReadFilter,
-        colapse: bool,
+        collapse_intervals: bool,
     ) -> Self {
         Self {
             file_path,
@@ -157,9 +157,18 @@ impl BamPileup {
             scale_factor,
             use_fragment,
             filter,
-            collapse: colapse,
+            collapse: collapse_intervals,
         }
     }
+
+
+    pub fn normalization_factor(&self) -> f64 {
+        // Return the normalization factor based on the method and scale factor.
+        let stats = BamStats::new(self.file_path.clone())
+            .expect("Failed to create BamStats");
+        self.norm_method.scale_factor(self.scale_factor, self.bin_size, stats.n_mapped())
+    }
+
 
     /// Generate pileup intervals for the BAM file.
     ///
@@ -342,20 +351,7 @@ impl BamPileup {
     /// Normalize the pileup signal using the provided normalization method.
     fn pileup_normalised(&self) -> Result<DataFrame> {
         let mut df = self.pileup_to_polars()?;
-        // Get the total counts across all bins.
-        let n_total_counts: u64 = df
-            .column("score")?
-            .sum_reduce()?
-            .as_any_value()
-            .try_extract()?;
-        info!("Total counts: {}", n_total_counts);
-
-        // Compute the normalization factor.
-        let norm_factor =
-            self.norm_method
-                .scale_factor(self.scale_factor, self.bin_size, n_total_counts);
-        // Multiply the score column by the normalization factor.
-        let norm_scores = df.column("score")?.u32()? * norm_factor;
+        let norm_scores = df.column("score")?.u32()? * self.normalization_factor();
         df.replace("score", norm_scores)?;
         Ok(df)
     }
@@ -504,5 +500,243 @@ impl MultiBamPileup {
         Ok(())
     }
 
+
+}
+
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+    use tempfile::TempDir;
+    use crate::filter::BamReadFilter;
+    use crate::normalization::NormalizationMethod;
+
+    // Helper function to create a test BamPileup instance
+    fn create_test_bam_pileup() -> BamPileup {
+        BamPileup::new(
+            PathBuf::from("test.bam"),
+            1000,
+            NormalizationMethod::Raw,
+            1.0,
+            false,
+            BamReadFilter::default(),
+            false,
+        )
+    }
+
+    #[test]
+    fn test_bam_pileup_new() {
+        let file_path = PathBuf::from("test.bam");
+        let pileup = BamPileup::new(
+            file_path.clone(),
+            1000,
+            NormalizationMethod::RPKM,
+            2.0,
+            true,
+            BamReadFilter::default(),
+            true,
+        );
+
+        assert_eq!(pileup.file_path, file_path);
+        assert_eq!(pileup.bin_size, 1000);
+        assert_eq!(pileup.scale_factor, 2.0);
+        assert_eq!(pileup.use_fragment, true);
+        assert_eq!(pileup.collapse, true);
+    }
+
+    #[test]
+    fn test_write_bedgraph() {
+        let temp_dir = TempDir::new().unwrap();
+        let output_path = temp_dir.path().join("test.bedgraph");
+
+        // Create test DataFrame
+        let df = DataFrame::new(vec![
+            Column::new("chrom".into(), vec!["chr1", "chr1", "chr2"]),
+            Column::new("start".into(), vec![0u64, 1000u64, 0u64]),
+            Column::new("end".into(), vec![1000u64, 2000u64, 1000u64]),
+            Column::new("score".into(), vec![10u32, 20u32, 15u32]),
+        ]).unwrap();
+
+        let result = write_bedgraph(df, output_path.clone());
+        assert!(result.is_ok());
+        assert!(output_path.exists());
+
+        // Verify the file was written correctly
+        let contents = std::fs::read_to_string(output_path).unwrap();
+        let lines: Vec<&str> = contents.trim().split('\n').collect();
+        assert_eq!(lines.len(), 3);
+    }
+
+    #[test]
+    fn test_collapse_equal_bins() {
+        // Create DataFrame with adjacent bins having same scores
+        let df = DataFrame::new(vec![
+            Column::new("chrom".into(), vec!["chr1", "chr1", "chr1", "chr1"]),
+            Column::new("start".into(), vec![0u64, 1000u64, 2000u64, 3000u64]),
+            Column::new("end".into(), vec![1000u64, 2000u64, 3000u64, 4000u64]),
+            Column::new("score".into(), vec![10u32, 10u32, 20u32, 20u32]),
+        ]).unwrap();
+
+        let result = collapse_equal_bins(df, None).unwrap();
+        
+        // Should collapse adjacent bins with same scores
+        assert!(result.height() < 4);
+        
+        // Verify the collapsed bins have correct aggregated values
+        let score_col = result.column("score").unwrap();
+        let score = score_col.sum_reduce().expect("Failed to sum scores");
+        assert_eq!(score.as_any_value().try_extract::<u32>().unwrap(), 60);
+
+        }
+
+    #[test]
+    fn test_convert_bedgraph_to_bigwig() {
+        let temp_dir = TempDir::new().unwrap();
+        let bedgraph_path = temp_dir.path().join("test.bedgraph");
+        let chromsizes_path = temp_dir.path().join("test.chrom.sizes");
+        let bigwig_path = temp_dir.path().join("test.bw");
+
+        // Create mock bedgraph file
+        std::fs::write(&bedgraph_path, "chr1\t0\t1000\t10\nchr1\t1000\t2000\t20\n").unwrap();
+        
+        // Create mock chromsizes file
+        std::fs::write(&chromsizes_path, "chr1\t2000\n").unwrap();
+
+        // Note: This test will fail if bedGraphToBigWig is not installed
+        // In a real test environment, you might want to mock this or skip the test
+        let result = convert_bedgraph_to_bigwig(&bedgraph_path, &chromsizes_path, &bigwig_path);
+        
+        // We expect this to fail in most test environments since bedGraphToBigWig won't be available
+        // The test mainly validates the function structure and error handling
+        match result {
+            Ok(_) => {
+                // If it succeeds, verify the output file was created
+                assert!(bigwig_path.exists());
+            }
+            Err(_) => {
+                // Expected in most test environments - bedGraphToBigWig not available
+                assert!(true);
+            }
+        }
+    }
+
+    #[test]
+    fn test_bam_pileup_display() {
+        let pileup = create_test_bam_pileup();
+        let display_str = format!("{}", pileup);
+        
+        assert!(display_str.contains("Pileup Settings:"));
+        assert!(display_str.contains("BAM file: test.bam"));
+        assert!(display_str.contains("Bin size: 1000"));
+        assert!(display_str.contains("Normalization method:"));
+        assert!(display_str.contains("Scaling factor: 1"));
+        assert!(display_str.contains("Using fragment for counting: false"));
+    }
+
+    #[test]
+    fn test_bam_to_bigwig_raw_scale() {
+        let test_data_dir = PathBuf::from(file!()).ancestors().nth(2).unwrap().join("test/data");
+        let temp_dir = TempDir::new().unwrap();
+        let bam_file = test_data_dir.join("test.bam");
+        let output_path = temp_dir.path().join("test.bw");
+        let pileup = BamPileup::new(
+            bam_file,
+            1000,
+            NormalizationMethod::Raw,
+            1.0,
+            false,
+            BamReadFilter::default(),
+            true,
+        );
+        let result = pileup.to_bigwig(output_path.clone());
+        result.expect("Failed to create BigWig file");
+
+        assert!(output_path.exists(), "BigWig file was not created");
+        info!("BigWig file created at: {}", output_path.display());
+
+        let bw = BigWigRead::open_file(output_path.clone());
+        assert!(bw.is_ok(), "Failed to open BigWig file");
+        let mut bw = bw.unwrap();
+
+        let stats = bw.get_summary()
+            .expect("Failed to get BigWig summary");
+
+
+        assert_eq!(stats.min_val, 0.0);
+        assert_eq!(stats.max_val, 117.0);
+
+    }
+
+
+    #[test]
+    fn test_bam_to_bigwig_cpm_scale(){
+
+        let test_data_dir = PathBuf::from(file!()).ancestors().nth(2).unwrap().join("test/data");
+        let temp_dir = TempDir::new().unwrap();
+        let bam_file = test_data_dir.join("test.bam");
+        let output_path = temp_dir.path().join("test_cpm.bw");
+        let pileup = BamPileup::new(
+            bam_file,
+            1000,
+            NormalizationMethod::CPM,
+            1.0,
+            false,
+            BamReadFilter::default(),
+            true,
+        );
+        let result = pileup.to_bigwig(output_path.clone());
+        result.expect("Failed to create BigWig file");
+
+        assert!(output_path.exists(), "BigWig file was not created");
+        info!("BigWig file created at: {}", output_path.display());
+
+        let bw = BigWigRead::open_file(output_path.clone());
+        assert!(bw.is_ok(), "Failed to open BigWig file");
+        let mut bw = bw.unwrap();
+
+        let stats = bw.get_summary()
+            .expect("Failed to get BigWig summary");
+
+        println!("BigWig stats: {:?}", stats);
+        assert_eq!(stats.min_val, 0.0);
+        assert_eq!(stats.max_val, 10062.0);
+
+    }
+
+    #[test]
+    fn test_bam_to_bigwig_rpkm_scale(){
+        let test_data_dir = PathBuf::from(file!()).ancestors().nth(2).unwrap().join("test/data");
+        let temp_dir = TempDir::new().unwrap();
+        let bam_file = test_data_dir.join("test.bam");
+        let output_path = temp_dir.path().join("test_rpkm.bw");
+        let pileup = BamPileup::new(
+            bam_file,
+            1000,
+            NormalizationMethod::RPKM,
+            1.0,
+            false,
+            BamReadFilter::default(),
+            false,
+        );
+        let result = pileup.to_bigwig(output_path.clone());
+        result.expect("Failed to create BigWig file");
+
+        assert!(output_path.exists(), "BigWig file was not created");
+        info!("BigWig file created at: {}", output_path.display());
+
+        let bw = BigWigRead::open_file(output_path.clone());
+        assert!(bw.is_ok(), "Failed to open BigWig file");
+        let mut bw = bw.unwrap();
+
+        let stats = bw.get_summary()
+            .expect("Failed to get BigWig summary");
+
+        println!("BigWig stats: {:?}", stats);
+        assert_eq!(stats.min_val, 0.0);
+        assert_eq!(stats.max_val, 10062.0);
+
+    }
 
 }

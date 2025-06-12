@@ -139,6 +139,21 @@ impl Display for BamReadFilter {
     }
 }
 
+
+impl Default for BamReadFilter {
+    fn default() -> Self {
+        Self::new(
+            true,
+            Some(0),
+            Some(0),
+            Some(1000),
+            None,
+            None,
+            None,
+        )
+    }
+}
+
 impl BamReadFilter {
     pub fn new(
         proper_pair: bool,
