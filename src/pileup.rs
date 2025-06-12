@@ -6,7 +6,7 @@ use std::fmt::{Display, Formatter, Result as FmtResult};
 use std::ops::Deref;
 use std::path::PathBuf;
 use std::process::Command;
-
+use regex::Regex;
 use ahash::HashMap;
 use anyhow::{Context, Result};
 use indicatif::ParallelProgressIterator;
@@ -25,14 +25,32 @@ use crate::normalization::NormalizationMethod;
 use crate::utils::{get_bam_header, progress_bar, BamStats, Iv};
 
 /// Write a DataFrame as a bedGraph file (tab-separated, no header).
-fn write_bedgraph(mut df: DataFrame, outfile: PathBuf) -> Result<()> {
-    // Sort by chromosome and start position.
-    df = df.sort(["chrom", "start"], SortMultipleOptions::new().with_order_descending_multi([false, false]))?;
+fn write_bedgraph(mut df: DataFrame, outfile: PathBuf, ignore_scaffold_chromosomes: bool) -> Result<()> {
+    // If ignore_scaffold_chromosomes is true, filter out scaffold chromosomes
+    let mut df = match ignore_scaffold_chromosomes {
+        true => {
+            let pattern = Regex::new("(chrUn.*|.*alt|.*random)").unwrap();
+            let mask = df
+                .column("chrom")?
+                .str()?
+                .iter()
+                .filter_map(|s| s)
+                .map(|s| !pattern.is_match(s))
+                .collect::<BooleanChunked>();
+            df.filter(&mask)?
+        },
+        false => df,
+    };
+    
+    df.sort_in_place(["chrom", "start"], SortMultipleOptions::default())?;
+
     let mut file = std::fs::File::create(outfile)?;
     CsvWriter::new(&mut file)
         .include_header(false)
         .with_separator(b'\t')
         .finish(&mut df)?;
+
+
     Ok(())
 }
 
@@ -125,6 +143,8 @@ pub struct BamPileup {
     filter: BamReadFilter,
     // Merge adjacent bins with equal scores.
     collapse: bool,
+    // Ignore scaffold chromosomes in the pileup.
+    ignore_scaffold_chromosomes: bool,
 }
 
 impl Display for BamPileup {
@@ -149,6 +169,7 @@ impl BamPileup {
         use_fragment: bool,
         filter: BamReadFilter,
         collapse_intervals: bool,
+        ignore_scaffold_chromosomes: bool,
     ) -> Self {
         Self {
             file_path,
@@ -158,17 +179,20 @@ impl BamPileup {
             use_fragment,
             filter,
             collapse: collapse_intervals,
+            ignore_scaffold_chromosomes,
         }
     }
 
 
     pub fn normalization_factor(&self) -> f64 {
-        // Return the normalization factor based on the method and scale factor.
-        let stats = BamStats::new(self.file_path.clone())
-            .expect("Failed to create BamStats");
-        self.norm_method.scale_factor(self.scale_factor, self.bin_size, stats.n_mapped())
+        // Calculate the normalization factor based on the normalization method.
+        let filter_stats = self.filter.stats();
+        let n_reads = filter_stats.n_reads_after_filtering();
+        let normalization_factor = self.norm_method.scale_factor(self.scale_factor, self.bin_size, n_reads);
+        // Log the normalization factor.
+        info!("Normalization factor: {}", normalization_factor);
+        normalization_factor
     }
-
 
     /// Generate pileup intervals for the BAM file.
     ///
@@ -351,8 +375,8 @@ impl BamPileup {
     /// Normalize the pileup signal using the provided normalization method.
     fn pileup_normalised(&self) -> Result<DataFrame> {
         let mut df = self.pileup_to_polars()?;
-        let norm_scores = df.column("score")?.u32()? * self.normalization_factor();
-        df.replace("score", norm_scores)?;
+        let norm_scores = df.column("score")?.cast(&DataType::Float64)? * self.normalization_factor();
+        df.with_column(norm_scores)?;
         Ok(df)
     }
 
@@ -360,7 +384,8 @@ impl BamPileup {
     pub fn to_bedgraph(&self, outfile: PathBuf) -> Result<()> {
         info!("Writing bedGraph file to {}", outfile.display());
         let df = self.pileup_normalised()?;
-        write_bedgraph(df, outfile)
+        write_bedgraph(df, outfile, self.ignore_scaffold_chromosomes)?;
+        Ok(())
     }
 
     /// Write the normalized pileup as a BigWig file.
@@ -523,6 +548,7 @@ mod tests {
             false,
             BamReadFilter::default(),
             false,
+            false,
         )
     }
 
@@ -537,6 +563,7 @@ mod tests {
             true,
             BamReadFilter::default(),
             true,
+            false,
         );
 
         assert_eq!(pileup.file_path, file_path);
@@ -559,7 +586,7 @@ mod tests {
             Column::new("score".into(), vec![10u32, 20u32, 15u32]),
         ]).unwrap();
 
-        let result = write_bedgraph(df, output_path.clone());
+        let result = write_bedgraph(df, output_path.clone(), true);
         assert!(result.is_ok());
         assert!(output_path.exists());
 
@@ -649,6 +676,7 @@ mod tests {
             false,
             BamReadFilter::default(),
             true,
+            false,
         );
         let result = pileup.to_bigwig(output_path.clone());
         result.expect("Failed to create BigWig file");
@@ -685,6 +713,7 @@ mod tests {
             false,
             BamReadFilter::default(),
             true,
+            false,
         );
         let result = pileup.to_bigwig(output_path.clone());
         result.expect("Failed to create BigWig file");
@@ -718,6 +747,7 @@ mod tests {
             1.0,
             false,
             BamReadFilter::default(),
+            false,
             false,
         );
         let result = pileup.to_bigwig(output_path.clone());
