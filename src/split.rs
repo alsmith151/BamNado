@@ -9,8 +9,9 @@ use indicatif::ProgressBar;
 
 use noodles::core::{Position, Region};
 use noodles::{bam, sam};
+use noodles::bam::bai;
 use noodles::sam::header::record::value::{map::ReferenceSequence, Map};
-use noodles::bam::{bai, AsyncReader, AsyncWriter};
+use noodles::bam::r#async::io::{Reader as AsyncReader, Writer as AsyncWriter};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use std::path::PathBuf;
 
@@ -46,7 +47,10 @@ impl BamSplitter {
             }
         };
 
-        let index = bai::r#async::read(self.filepath.with_extension("bam.bai")).await?;
+        let index_path = self.filepath.with_extension("bam.bai");
+        let index_file = File::open(&index_path).await?;
+        let mut index_reader = bai::r#async::io::Reader::new(index_file);
+        let index = index_reader.read_index().await?;
 
         // Make writer
         let mut writer = AsyncWriter::new(File::create(outfile).await?);

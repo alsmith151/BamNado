@@ -103,7 +103,7 @@ impl Serialize for SplitStats {
 
 pub struct BamSplitter {
     // The input BAM file
-    input_bam: bam::io::Reader<noodles::bgzf::Reader<std::fs::File>>,
+    input_bam: bam::io::Reader<noodles::bgzf::io::Reader<std::fs::File>>,
     input_header: sam::Header,
 
     // The output BAM files
@@ -136,7 +136,7 @@ impl BamSplitter {
         exogenous_prefix: String,
         allow_unknown_mapq: bool,
     ) -> Result<Self> {
-        let mut input_bam: bam::io::Reader<noodles::bgzf::Reader<std::fs::File>> =
+        let mut input_bam: bam::io::Reader<noodles::bgzf::io::Reader<std::fs::File>> =
             bam::io::reader::Builder::default().build_from_path(input_path.clone())?;
 
         let endogenous_path = output_prefix.with_extension("endogenous.bam");
