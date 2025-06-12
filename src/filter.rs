@@ -80,6 +80,14 @@ impl Display for BamReadFilterStatsSnapshot {
     }
 }
 
+impl BamReadFilterStatsSnapshot {
+    pub fn n_reads_after_filtering(&self) -> u64 {
+        self.n_total - (self.n_failed_proper_pair + self.n_failed_mapq + self.n_failed_length + self.n_failed_blacklist + self.n_failed_barcode + self.n_not_in_read_group)
+    }
+
+}
+
+
 /// A filter for BAM reads.
 /// Set the minimum mapping quality, minimum and maximum read length, blacklisted locations, and whitelisted barcodes.
 /// The filter is applied to each read in the BAM file.
