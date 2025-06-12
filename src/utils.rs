@@ -382,6 +382,16 @@ impl BamStats {
         }
         Ok(())
     }
+
+    pub fn n_mapped(&self) -> u64 {
+        self.n_mapped
+    }
+    pub fn n_unmapped(&self) -> u64 {
+        self.n_unmapped
+    }
+    pub fn n_total_reads(&self) -> u64 {
+        self.n_reads
+    }
 }
 
 pub enum FileType {
