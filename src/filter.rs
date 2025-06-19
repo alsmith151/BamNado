@@ -26,6 +26,8 @@ pub struct BamReadFilterStats {
     n_failed_barcode: AtomicU64,
     // Number of reads not in read group
     n_not_in_read_group: AtomicU64,
+    // Number of reads filtered by incorrect strand
+    n_incorrect_strand: AtomicU64,
 }
 
 impl BamReadFilterStats {
@@ -38,6 +40,7 @@ impl BamReadFilterStats {
             n_failed_blacklist: AtomicU64::new(0),
             n_failed_barcode: AtomicU64::new(0),
             n_not_in_read_group: AtomicU64::new(0),
+            n_incorrect_strand: AtomicU64::new(0),
         }
     }
 
@@ -50,6 +53,7 @@ impl BamReadFilterStats {
             n_failed_blacklist: self.n_failed_blacklist.load(Ordering::Relaxed),
             n_failed_barcode: self.n_failed_barcode.load(Ordering::Relaxed),
             n_not_in_read_group: self.n_not_in_read_group.load(Ordering::Relaxed),
+            n_incorrect_strand: self.n_incorrect_strand.load(Ordering::Relaxed),
         }
     }
 }
@@ -63,6 +67,7 @@ pub struct BamReadFilterStatsSnapshot {
     n_failed_blacklist: u64,
     n_failed_barcode: u64,
     n_not_in_read_group: u64,
+    n_incorrect_strand: u64,
 }
 
 impl Display for BamReadFilterStatsSnapshot {
@@ -75,14 +80,15 @@ impl Display for BamReadFilterStatsSnapshot {
         writeln!(f, "Failed blacklist: {}", self.n_failed_blacklist)?;
         writeln!(f, "Failed barcode: {}", self.n_failed_barcode)?;
         writeln!(f, "Not in read group: {}", self.n_not_in_read_group)?;
-        writeln!(f, "Filtered reads: {}", self.n_failed_proper_pair + self.n_failed_mapq + self.n_failed_length + self.n_failed_blacklist + self.n_failed_barcode + self.n_not_in_read_group)?;
+        writeln!(f, "Incorrect strand: {}", self.n_incorrect_strand)?;
+        writeln!(f, "Filtered reads: {}", self.n_failed_proper_pair + self.n_failed_mapq + self.n_failed_length + self.n_failed_blacklist + self.n_failed_barcode + self.n_not_in_read_group + self.n_incorrect_strand)?;
         Ok(())
     }
 }
 
 impl BamReadFilterStatsSnapshot {
     pub fn n_reads_after_filtering(&self) -> u64 {
-        self.n_total - (self.n_failed_proper_pair + self.n_failed_mapq + self.n_failed_length + self.n_failed_blacklist + self.n_failed_barcode + self.n_not_in_read_group)
+        self.n_total - (self.n_failed_proper_pair + self.n_failed_mapq + self.n_failed_length + self.n_failed_blacklist + self.n_failed_barcode + self.n_not_in_read_group + self.n_incorrect_strand)
     }
 
 }
@@ -115,6 +121,7 @@ pub struct BamReadFilter {
 
 impl Display for BamReadFilter {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "\tOnly allowing reads with strand: {}", self.strand)?;
         writeln!(f, "\tProper pair: {}", self.proper_pair)?;
         writeln!(f, "\tMinimum mapping quality: {}", self.min_mapq)?;
         writeln!(f, "\tMinimum read length: {}", self.min_length)?;
@@ -213,12 +220,14 @@ impl BamReadFilter {
             true => {
                 // Read is reverse stranded. If the filter is set for only forward reads we need to return false.
                 if self.strand == bio_types::strand::Strand::Forward {
+                    self.stats.n_incorrect_strand.fetch_add(1, Ordering::Relaxed);
                     return Ok(false);
                 }
             }
             false => {
                 // Read is forward stranded. If the filter is set for only reverse reads we need to return false.
                 if self.strand == bio_types::strand::Strand::Reverse {
+                    self.stats.n_incorrect_strand.fetch_add(1, Ordering::Relaxed);
                     return Ok(false);
                 }
             }

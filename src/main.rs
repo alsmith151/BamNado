@@ -125,7 +125,7 @@ struct Cli {
     command: Commands,
 
     /// Verbosity level
-    #[arg(short, long, required = false, default_value = "0")]
+    #[arg(short, long, required = false, default_value = "2")]
     verbose: u8,
 }
 
