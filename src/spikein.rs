@@ -124,9 +124,6 @@ pub struct BamSplitter {
 
     // The statistics for the split
     stats: SplitStats,
-
-    // Options
-    allow_unknown_mapq: bool,
 }
 
 impl BamSplitter {
@@ -134,7 +131,6 @@ impl BamSplitter {
         input_path: PathBuf,
         output_prefix: PathBuf,
         exogenous_prefix: String,
-        allow_unknown_mapq: bool,
     ) -> Result<Self> {
         let mut input_bam: bam::io::Reader<noodles::bgzf::io::Reader<std::fs::File>> =
             bam::io::reader::Builder::default().build_from_path(input_path.clone())?;
@@ -194,7 +190,6 @@ impl BamSplitter {
             endogenous_refseq_ids,
             exogenous_refseq_ids,
             stats,
-            allow_unknown_mapq,
         })
     }
 
@@ -287,16 +282,6 @@ impl BamSplitter {
             let is_qcfail = record.flags().is_qc_fail();
             let is_duplicate = record.flags().is_duplicate();
             let is_secondary = record.flags().is_secondary();
-            let mapq = match record.mapping_quality() {
-                Some(mapq) => mapq.get(),
-                None => match self.allow_unknown_mapq {
-                    true => 60,
-                    false => {
-                        error!("Unknown mapping quality for record: {:?}", record);
-                        continue;
-                    }
-                },
-            };
 
             if is_unmapped {
                 self.stats.n_unmapped_reads += 1;
@@ -315,11 +300,6 @@ impl BamSplitter {
                     .expect("Failed to send record");
             } else if is_secondary {
                 self.stats.n_secondary_reads += 1;
-                tx_unmapped
-                    .send(record.clone())
-                    .expect("Failed to send record");
-            } else if mapq < 1 {
-                self.stats.n_low_maq += 1;
                 tx_unmapped
                     .send(record.clone())
                     .expect("Failed to send record");

@@ -244,19 +244,25 @@ impl BamReadFilter {
             return Ok(false);
         }
 
-        let mapping_quality = match alignment.mapping_quality() {
-            Some(Ok(mapping_quality)) => mapping_quality,
+
+        // Filter by mapping quality.
+        match alignment.mapping_quality() {
+            Some(Ok(mapping_quality)) => {
+                if mapping_quality.get() < self.min_mapq {
+                    self.stats.n_failed_mapq.fetch_add(1, Ordering::Relaxed);
+                    return Ok(false);
+                }
+            }
+            None => {
+                // STAR mapping quality does not match the standard SAM format will just assume it is maximum.
+                // This is a workaround for STAR mappings that do not provide mapping quality.
+            },
             _ => {
                 self.stats.n_failed_mapq.fetch_add(1, Ordering::Relaxed);
                 return Ok(false);
             }
-        };
-
-        // Filter by mapping quality.
-        if mapping_quality.get() < self.min_mapq {
-            self.stats.n_failed_mapq.fetch_add(1, Ordering::Relaxed);
-            return Ok(false);
         }
+
 
         // Filter by read length.
         let alignment_length = alignment.sequence().len();

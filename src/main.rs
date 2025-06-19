@@ -493,7 +493,6 @@ fn main() -> Result<()> {
                 input.clone(),
                 output.clone(),
                 exogenous_prefix.clone(),
-                *allow_unknown_mapq,
             ).context("Failed to create BamSplitter")?;
 
             split.split()
