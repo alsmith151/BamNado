@@ -6,6 +6,7 @@ use std::{
     path::{Path, PathBuf},
 };
 use utils::BamStats;
+use std::str::FromStr;
 
 mod filter;
 mod intervals;
@@ -15,7 +16,7 @@ mod split;
 mod utils;
 mod normalization;
 
-use crate::utils::FileType;
+use crate::utils::{FileType, Strand};
 
 pub fn get_styles() -> clap::builder::Styles {
     clap::builder::Styles::styled()
@@ -55,9 +56,14 @@ pub fn get_styles() -> clap::builder::Styles {
         )
 }
 
+
 // Define common filter options as a trait to avoid code duplication
 #[derive(Parser, Clone)]
 struct FilterOptions {
+    /// Filter reads based on strand
+    #[arg(long, default_value = "both")]
+    strand: Strand,
+
     /// Properly paired reads only
     #[arg(long, action = clap::ArgAction::SetTrue)]
     proper_pair: bool,
@@ -221,6 +227,9 @@ fn create_filter_from_options(
     filter_options: &FilterOptions, 
     bam_stats: Option<&BamStats>
 ) -> Result<filter::BamReadFilter> {
+
+
+
     // Process whitelisted barcodes
     let whitelisted_barcodes = match &filter_options.whitelisted_barcodes {
         Some(whitelist) => {
@@ -258,6 +267,7 @@ fn create_filter_from_options(
     println!("Blacklisted locations: {:?}", blacklisted_locations);
 
     Ok(filter::BamReadFilter::new(
+        filter_options.strand.into(),
         filter_options.proper_pair,
         Some(filter_options.min_mapq),
         Some(filter_options.min_length),
@@ -422,6 +432,7 @@ fn main() -> Result<()> {
 
                 // Create filter
                 let filter = filter::BamReadFilter::new(
+                    filter_options.strand.into(),
                     filter_options.proper_pair,
                     Some(filter_options.min_mapq),
                     Some(filter_options.min_length),

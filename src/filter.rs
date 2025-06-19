@@ -93,6 +93,8 @@ impl BamReadFilterStatsSnapshot {
 /// The filter is applied to each read in the BAM file.
 #[derive(Debug, Clone)]
 pub struct BamReadFilter {
+    // Whether to select only a specific strand of reads
+    strand: bio_types::strand::Strand,
     // Properly paired reads only
     proper_pair: bool,
     // Minimum mapping quality
@@ -151,6 +153,7 @@ impl Display for BamReadFilter {
 impl Default for BamReadFilter {
     fn default() -> Self {
         Self::new(
+            bio_types::strand::Strand::Unknown,
             true,
             Some(0),
             Some(0),
@@ -164,6 +167,7 @@ impl Default for BamReadFilter {
 
 impl BamReadFilter {
     pub fn new(
+        strand: bio_types::strand::Strand,
         proper_pair: bool,
         min_mapq: Option<u8>,
         min_length: Option<u32>,
@@ -177,6 +181,7 @@ impl BamReadFilter {
         let max_length = max_length.unwrap_or(std::u32::MAX);
 
         Self {
+            strand,
             proper_pair,
             min_mapq,
             min_length,
@@ -202,6 +207,22 @@ impl BamReadFilter {
                 return Ok(false);
             }
         };
+
+        // Filter by strand.
+        match flags.is_reverse_complemented() {
+            true => {
+                // Read is reverse stranded. If the filter is set for only forward reads we need to return false.
+                if self.strand == bio_types::strand::Strand::Forward {
+                    return Ok(false);
+                }
+            }
+            false => {
+                // Read is forward stranded. If the filter is set for only reverse reads we need to return false.
+                if self.strand == bio_types::strand::Strand::Reverse {
+                    return Ok(false);
+                }
+            }
+        }
 
         // Filter by proper pair.
         if self.proper_pair && !flags.is_properly_segmented() {
