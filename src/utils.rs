@@ -15,9 +15,54 @@ use std::io::{BufRead, Write};
 use std::ops::Bound;
 use std::path::{Path, PathBuf};
 use regex::Regex;
+use std::str::FromStr;
+use bio_types::strand::Strand as BioStrand;
 
 pub const CB: [u8; 2] = [b'C', b'B'];
 pub type Iv = Interval<usize, u32>;
+
+
+
+#[derive(Debug, Clone, PartialEq, Eq, Copy)]
+pub enum Strand {
+    Forward,
+    Reverse,
+    Both,
+}
+impl FromStr for Strand {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "forward" => Ok(Strand::Forward),
+            "reverse" => Ok(Strand::Reverse),
+            "both" => Ok(Strand::Both),
+            _ => Err(format!("Invalid strand value: {}", s)),
+        }
+    }
+}
+impl std::fmt::Display for Strand {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Strand::Forward => write!(f, "forward"),
+            Strand::Reverse => write!(f, "reverse"),
+            Strand::Both => write!(f, "both"),
+        }
+    }
+}
+
+impl Into<BioStrand> for Strand {
+    fn into(self) -> BioStrand {
+        match self {
+            Strand::Forward => BioStrand::Forward,
+            Strand::Reverse => BioStrand::Reverse,
+            Strand::Both => BioStrand::Unknown,
+        }
+    }
+}
+
+
+
 
 pub fn progress_bar(length: u64, message: String) -> indicatif::ProgressBar {
     // Progress bar
