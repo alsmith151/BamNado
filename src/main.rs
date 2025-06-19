@@ -314,7 +314,7 @@ fn main() -> Result<()> {
         _ => log::LevelFilter::Trace,
     };
     
-    // Set log level (missing implementation to use log_level)
+    log::set_max_level(log_level);
 
     match &cli.command {
         Commands::BamCoverage {
