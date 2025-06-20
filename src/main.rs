@@ -5,18 +5,9 @@ use std::{
     io::Write,
     path::{Path, PathBuf},
 };
-use utils::BamStats;
 use std::str::FromStr;
+use bamnado::utils::FileType;
 
-mod filter;
-mod intervals;
-mod pileup;
-mod spikein;
-mod split;
-mod utils;
-mod normalization;
-
-use crate::utils::{FileType, Strand};
 
 pub fn get_styles() -> clap::builder::Styles {
     clap::builder::Styles::styled()
@@ -62,7 +53,7 @@ pub fn get_styles() -> clap::builder::Styles {
 struct FilterOptions {
     /// Filter reads based on strand
     #[arg(long, default_value = "both")]
-    strand: Strand,
+    strand: bamnado::Strand,
 
     /// Properly paired reads only
     #[arg(long, action = clap::ArgAction::SetTrue)]
@@ -102,7 +93,7 @@ struct CoverageOptions {
 
     /// Normalization method to use
     #[arg(short, long, default_value = "raw")]
-    norm_method: Option<normalization::NormalizationMethod>,
+    norm_method: Option<bamnado::normalization::NormalizationMethod>,
 
     /// Scaling factor for the pileup
     #[arg(short = 'f', long)]
@@ -225,15 +216,15 @@ fn validate_bam_file(bam_path: &Path) -> Result<()> {
 
 fn create_filter_from_options(
     filter_options: &FilterOptions, 
-    bam_stats: Option<&BamStats>
-) -> Result<filter::BamReadFilter> {
+    bam_stats: Option<&bamnado::BamStats>
+) -> Result<bamnado::filter::BamReadFilter> {
 
 
 
     // Process whitelisted barcodes
     let whitelisted_barcodes = match &filter_options.whitelisted_barcodes {
         Some(whitelist) => {
-            let barcodes = utils::CellBarcodes::from_csv(whitelist)
+            let barcodes = bamnado::CellBarcodes::from_csv(whitelist)
                 .context("Failed to read barcodes")?;
             Some(barcodes.barcodes())
         }
@@ -243,9 +234,9 @@ fn create_filter_from_options(
     // Process blacklisted locations
     let blacklisted_locations = match (&filter_options.blacklisted_locations, bam_stats) {
         (Some(blacklist), Some(stats)) => {
-            let lapper = utils::bed_to_lapper(blacklist.clone())
+            let lapper = bamnado::utils::bed_to_lapper(blacklist.clone())
                 .context("Failed to read blacklisted locations")?;
-            let lapper = utils::lapper_chrom_name_to_lapper_chrom_id(lapper, stats)
+            let lapper = bamnado::utils::lapper_chrom_name_to_lapper_chrom_id(lapper, stats)
                 .context("Failed to convert chrom names to chrom ids")?;
 
             // Merge overlapping intervals
@@ -266,7 +257,7 @@ fn create_filter_from_options(
 
     println!("Blacklisted locations: {:?}", blacklisted_locations);
 
-    Ok(filter::BamReadFilter::new(
+    Ok(bamnado::filter::BamReadFilter::new(
         filter_options.strand.into(),
         filter_options.proper_pair,
         Some(filter_options.min_mapq),
@@ -327,7 +318,7 @@ fn main() -> Result<()> {
             validate_bam_file(bam)?;
 
             // Get the BAM stats
-            let bam_stats = BamStats::new(bam.clone())
+            let bam_stats = bamnado::BamStats::new(bam.clone())
                 .context("Failed to read BAM stats")?;
 
             // Create filter
@@ -335,10 +326,10 @@ fn main() -> Result<()> {
 
 
             // Create pileup
-            let coverage = pileup::BamPileup::new(
+            let coverage = bamnado::pileup::BamPileup::new(
                 bam.clone(),
                 coverage_options.bin_size.unwrap_or(50),
-                coverage_options.norm_method.clone().unwrap_or(normalization::NormalizationMethod::Raw),
+                coverage_options.norm_method.clone().unwrap_or(bamnado::normalization::NormalizationMethod::Raw),
                 coverage_options.scale_factor.unwrap_or(1.0),
                 coverage_options.use_fragment,
                 filter,
@@ -398,7 +389,7 @@ fn main() -> Result<()> {
             // Get whitelisted barcodes for all BAMs
             let whitelisted_barcodes = match &filter_options.whitelisted_barcodes {
                 Some(whitelist) => {
-                    let barcodes = utils::CellBarcodesMulti::from_csv(whitelist)
+                    let barcodes = bamnado::utils::CellBarcodesMulti::from_csv(whitelist)
                         .context("Failed to read barcodes")?;
                     Some(barcodes.barcodes())
                 }
@@ -409,15 +400,15 @@ fn main() -> Result<()> {
             let mut pileups = Vec::new();
             for (index, bam) in bams.iter().enumerate() {
                 // Get BAM stats
-                let bam_stats = BamStats::new(bam.clone())
+                let bam_stats = bamnado::BamStats::new(bam.clone())
                     .context("Failed to read BAM stats")?;
 
                 // Process blacklisted locations
                 let blacklisted_locations = match &filter_options.blacklisted_locations {
                     Some(blacklist) => {
-                        let lapper = utils::bed_to_lapper(blacklist.clone())
+                        let lapper = bamnado::utils::bed_to_lapper(blacklist.clone())
                             .context("Failed to read blacklisted locations")?;
-                        let lapper = utils::lapper_chrom_name_to_lapper_chrom_id(lapper, &bam_stats)
+                        let lapper = bamnado::utils::lapper_chrom_name_to_lapper_chrom_id(lapper, &bam_stats)
                             .context("Failed to convert chrom names to chrom ids")?;
                         Some(lapper)
                     }
@@ -431,7 +422,7 @@ fn main() -> Result<()> {
                 };
 
                 // Create filter
-                let filter = filter::BamReadFilter::new(
+                let filter = bamnado::filter::BamReadFilter::new(
                     filter_options.strand.into(),
                     filter_options.proper_pair,
                     Some(filter_options.min_mapq),
@@ -443,10 +434,10 @@ fn main() -> Result<()> {
                 );
 
                 // Create pileup
-                pileups.push(pileup::BamPileup::new(
+                pileups.push(bamnado::pileup::BamPileup::new(
                     bam.clone(),
                     coverage_options.bin_size.unwrap_or(50),
-                    coverage_options.norm_method.clone().unwrap_or(normalization::NormalizationMethod::Raw),
+                    coverage_options.norm_method.clone().unwrap_or(bamnado::normalization::NormalizationMethod::Raw),
                     coverage_options.scale_factor.unwrap_or(1.0),
                     coverage_options.use_fragment,
                     filter,
@@ -456,7 +447,7 @@ fn main() -> Result<()> {
             }
 
             // Create multi-BAM pileup
-            let coverage = pileup::MultiBamPileup::new(pileups);
+            let coverage = bamnado::pileup::MultiBamPileup::new(pileups);
 
             // Process output based on file type
             let output_type = process_output_file_type(&output)?;
@@ -489,7 +480,7 @@ fn main() -> Result<()> {
             let filter = create_filter_from_options(filter_options, None)?;
 
             // Create and run BAM splitter
-            let mut split = spikein::BamSplitter::new(
+            let mut split = bamnado::spikein::BamSplitter::new(
                 input.clone(),
                 output.clone(),
                 exogenous_prefix.clone(),
@@ -528,7 +519,7 @@ fn main() -> Result<()> {
             let filter = create_filter_from_options(filter_options, None)?;
 
             // Create BAM splitter
-            let split = split::BamSplitter::new(
+            let split = bamnado::split::BamSplitter::new(
                 input.clone(),
                 output.clone(),
                 filter,
