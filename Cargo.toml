@@ -2,6 +2,14 @@
 name = "bamnado"
 version = "0.2.0"
 edition = "2024"
+license = "MIT OR Apache-2.0"
+description = "Tools and utilities for manipulation of BAM files for unusual use cases. e.g. single cell, MCC"
+repository = "https://github.com/alsmith151/BamNado"
+homepage = "https://github.com/alsmith151/BamNado"
+authors = ["Alastair Smith <alastair.smith@ndcls.ox.ac.uk>"]
+readme = "README.md"
+keywords = ["bioinformatics", "scATAC-seq", 'MCC']
+
 
 [dependencies]
 ahash = "0.8.12"
@@ -11,7 +19,7 @@ bio = "2.3.0"
 bio-types = "1.0.1"
 clap = {version = "4.5.40", features = ["derive"]}
 colog = "1.3.0"
-indicatif = {version = "*", features = ["rayon"]}
+indicatif = {version = "0.17.11", features = ["rayon"]}
 itertools = "*"
 log = "0.4.27"
 noodles = {version = '0.99.0', features = ['bgzf', 'cram','bed', 'core', 'csi', 'async', 'sam', 'bam']}
