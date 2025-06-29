@@ -103,6 +103,14 @@ struct CoverageOptions {
     #[arg(long, action = clap::ArgAction::SetTrue)]
     use_fragment: bool,
 
+    /// Shift options for the pileup
+    #[arg(long, default_value = "0,0,0,0")]
+    shift: Option<bamnado::intervals::Shift>,
+
+    /// Truncate options for the pileup
+    #[arg(long, default_value = "none")]
+    truncate: Option<bamnado::intervals::Truncate>,
+
     /// Ignore scaffold chromosomes
     #[arg(long, action = clap::ArgAction::SetTrue)]
     ignore_scaffold: bool,
