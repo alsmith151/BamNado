@@ -343,6 +343,8 @@ fn main() -> Result<()> {
                 filter,
                 true,
                 coverage_options.ignore_scaffold,
+                coverage_options.shift.clone(),
+                coverage_options.truncate.clone(),
             );
 
             // Determine output file
@@ -451,6 +453,8 @@ fn main() -> Result<()> {
                     filter,
                     false,
                     coverage_options.ignore_scaffold,
+                    coverage_options.shift.clone(),
+                    coverage_options.truncate.clone(),
                 ));
             }
 

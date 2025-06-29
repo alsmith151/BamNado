@@ -20,9 +20,10 @@ use tempfile;
 use bigtools::{DEFAULT_BLOCK_SIZE, DEFAULT_ITEMS_PER_SLOT};
 use bigtools::BigWigRead;
 use crate::filter::BamReadFilter;
-use crate::intervals::IntervalMaker;
+use crate::intervals::{IntervalMaker, Shift, Truncate};
 use crate::normalization::NormalizationMethod;
 use crate::utils::{get_bam_header, progress_bar, BamStats, Iv};
+
 
 /// Write a DataFrame as a bedGraph file (tab-separated, no header).
 fn write_bedgraph(mut df: DataFrame, outfile: PathBuf, ignore_scaffold_chromosomes: bool) -> Result<()> {
@@ -170,6 +171,8 @@ impl BamPileup {
         filter: BamReadFilter,
         collapse_intervals: bool,
         ignore_scaffold_chromosomes: bool,
+        shift: Option<Shift>,
+        truncate: Option<Truncate>,
     ) -> Self {
         Self {
             file_path,
@@ -236,9 +239,8 @@ impl BamPileup {
                             &chromsizes_refid,
                             &self.filter,
                             self.use_fragment,
-                            None,
-                            None,
-                            None,
+                            self.shift,
+                            self.truncate,
                         )
                         .coords()
                         .map(|(s, e, _dtlen)| Iv {

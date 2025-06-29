@@ -181,7 +181,7 @@ pub struct IntervalMaker<'a> {
     filter: &'a BamReadFilter,
     use_fragment: bool,
     shift: Shift,
-    truncate: Truncate,
+    truncate: Option<Truncate>,
 }
 
 impl<'a> IntervalMaker<'a> {
@@ -191,9 +191,8 @@ impl<'a> IntervalMaker<'a> {
         chromsizes: &'a HashMap<usize, u64>,
         filter: &'a BamReadFilter,
         use_fragment: bool,
-        shift: Option<[i32; 4]>, // Changed to i32 to handle negative values
-        truncate_5_prime: Option<usize>,
-        truncate_3_prime: Option<usize>,
+        shift: Option<Shift>,
+        truncate: Option<Truncate>,
     ) -> Self {
         Self {
             read,
@@ -202,7 +201,7 @@ impl<'a> IntervalMaker<'a> {
             filter,
             use_fragment,
             shift: shift.map_or_else(|| Shift::from([0, 0, 0, 0]), |s| Shift::from(s)),
-            truncate: Truncate::from((truncate_5_prime, truncate_3_prime)),
+            truncate: truncate,
         }
     }
 
@@ -377,16 +376,27 @@ impl<'a> IntervalMaker<'a> {
         let mut start = start;
         let mut end = end;
 
-        if let Some(truncate_5_prime) = self.truncate.five_prime {
-            start = start.saturating_add(truncate_5_prime);
+        if self.truncate.is_none() {
+            return (start, end);
         }
 
-        if let Some(truncate_3_prime) = self.truncate.three_prime {
+        // If truncate is set, apply the truncation values.
+        // If truncate_5_prime is set, we adjust the start position.
+        // If truncate_3_prime is set, we adjust the end position.
+        // These values are optional, so we check if they are Some before applying them.
+        if let Some(truncate) = self.truncate {
+            if let Some(truncate_5_prime) = truncate.five_prime {
+                start = start.saturating_add(truncate_5_prime);
+            }
+
+        if let Some(truncate_3_prime) = truncate.three_prime {
             end = end.saturating_sub(truncate_3_prime);
         }
 
-        (start, end)
     }
+
+        (start, end)
+}
 
     pub fn record(&self) -> Option<RecordBuf> {
         let (start, end, dtlen) = self.coords()?;
