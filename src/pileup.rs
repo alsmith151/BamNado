@@ -237,9 +237,11 @@ impl BamPileup {
                             &self.filter,
                             self.use_fragment,
                             None,
+                            None,
+                            None,
                         )
                         .coords()
-                        .map(|(s, e)| Iv {
+                        .map(|(s, e, _dtlen)| Iv {
                             start: s,
                             stop: e,
                             val: 1,
