@@ -36,3 +36,15 @@ anstyle = "1.0.11"
 futures = "0.3.31"
 tokio = { version = "1.45.1"}
 regex = "1.10.7"
+
+[package.metadata.release]
+sign-commit = false
+sign-tag = false
+pre-release-commit-message = "Release {{version}}"
+pro-release-commit-message = "Start next development iteration {{version}}"
+tag-message = "{{version}}"
+tag-name = "v{{version}}"
+pre-release-replacements = [
+  {file="README.md", search="bamnado = \"[a-z0-9\\.-]+\"", replace="bamnado = \"{{version}}\""},
+  {file="README.md", search="Version [a-z0-9\\.-]+", replace="Version {{version}}"},
+]

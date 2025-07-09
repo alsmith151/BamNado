@@ -101,6 +101,24 @@ jobs:
         with:
           save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' }}
 
+      - name: Extract version from tag
+        id: get_version
+        run: |
+          TAG=${GITHUB_REF#refs/tags/}
+          VERSION=${TAG#v}
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          echo "TAG=$TAG" >> $GITHUB_OUTPUT
+          echo "Extracted version: $VERSION from tag: $TAG"
+
+      - name: Update Cargo.toml version
+        run: |
+          sed -i.bak 's/^version = ".*"/version = "${{ steps.get_version.outputs.VERSION }}"/' Cargo.toml
+          echo "Updated version to ${{ steps.get_version.outputs.VERSION }}"
+          echo "Before:"
+          grep "^version" Cargo.toml.bak || true
+          echo "After:"
+          grep "^version" Cargo.toml
+
       - name: Login into crates.io
         run: cargo login ${{ secrets.CRATES_IO }}
 
