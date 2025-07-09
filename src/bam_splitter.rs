@@ -1,6 +1,6 @@
-use crate::filter::BamReadFilter;
-use crate::utils::get_bam_header;
-use crate::utils::BamStats;
+use crate::read_filter::BamReadFilter;
+use crate::bam_utils::get_bam_header;
+use crate::bam_utils::BamStats;
 use anyhow::Result;
 use crossbeam::channel::unbounded;
 use log::{debug, info, warn};
@@ -18,15 +18,15 @@ use std::path::PathBuf;
 use futures::TryStreamExt;
 use tokio::fs::File;
 
-pub struct BamSplitter {
+pub struct BamFilterer {
     filepath: PathBuf,
     output: PathBuf,
     filter: BamReadFilter,
 }
 
-impl BamSplitter {
+impl BamFilterer {
     pub fn new(filepath: PathBuf, output: PathBuf, filter: BamReadFilter) -> Self {
-        BamSplitter {
+        BamFilterer {
             filepath,
             output,
             filter,
