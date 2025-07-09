@@ -118,6 +118,20 @@ jobs:
           grep "^version" Cargo.toml.bak || true
           echo "After:"
           grep "^version" Cargo.toml
+          # Clean up backup file
+          rm -f Cargo.toml.bak
+
+      - name: Commit version updates
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add Cargo.toml
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "chore: bump version to ${{ steps.get_version.outputs.VERSION }} for release"
+            echo "✓ Committed version updates"
+          fi
 
       - name: Login into crates.io
         run: cargo login ${{ secrets.CRATES_IO }}
