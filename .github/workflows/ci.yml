@@ -1,23 +1,17 @@
 name: CI
 
-on:
-  push:
-    branches:
-      - main
-      - master
-    tags:
-      - '*'
-  pull_request:
-  workflow_dispatch:
+on: [push, pull_request]
 
 permissions:
   contents: write
 
+env:
+  CARGO_TERM_COLOR: always
+
 jobs:
   build:
-    name: Build ${{ matrix.target }}
-    runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
         include:
           - target: x86_64-unknown-linux-gnu
@@ -41,18 +35,17 @@ jobs:
             binary-suffix: ".exe"
             archive-suffix: "windows-x86_64"
 
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Install Rust toolchain
-        run: rustup toolchain install stable --profile minimal
+      - run: rustup toolchain install stable --profile minimal --no-self-update
 
-      - name: Add target
-        run: rustup target add ${{ matrix.target }}
+      - run: rustup target add ${{ matrix.target }}
 
-      - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}
           cache-targets: "true"
@@ -70,8 +63,9 @@ jobs:
           echo "[target.aarch64-unknown-linux-gnu]" >> ~/.cargo/config.toml
           echo "linker = \"aarch64-linux-gnu-gcc\"" >> ~/.cargo/config.toml
 
-      - name: Build binary
-        run: cargo build --release --target ${{ matrix.target }}
+      - run: |
+          cargo check --target ${{ matrix.target }}
+          cargo build --release --target ${{ matrix.target }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -83,17 +77,15 @@ jobs:
     name: Run tests
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Install Rust toolchain
-        run: rustup toolchain install stable --profile minimal
+      - run: rustup toolchain install stable --profile minimal --no-self-update
 
-      - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2
 
-      - name: Run tests
-        run: cargo test --release
+      - run: |
+          cargo check
+          cargo test --release
 
   release:
     name: Create Release
@@ -101,28 +93,22 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/')
     needs: [build, test]
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Install Rust toolchain
-        run: rustup toolchain install stable --profile minimal
+      - run: rustup toolchain install stable --profile minimal --no-self-update
 
-      - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' }}
 
       - name: Login into crates.io
         run: cargo login ${{ secrets.CRATES_IO }}
 
-      - name: Build binaries in "release" mode
-        run: cargo build -r
-
-      - name: "Package for crates.io"
-        run: cargo package
-
-      - name: "Publish to crates.io"
-        run: cargo publish
+      - run: |
+          cargo check
+          cargo build --release
+          cargo package
+          cargo publish
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4
