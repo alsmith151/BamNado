@@ -11,7 +11,7 @@ use noodles::{bam, bed};
 use polars::prelude::*;
 use rayon::prelude::*;
 
-use crate::utils::{regions_to_lapper, BamStats, Iv};
+use crate::bam_utils::{regions_to_lapper, BamStats, Iv};
 
 // Aim: to convert the following python code to rust
 
@@ -1112,8 +1112,6 @@ impl Heatmapper {
                         val: 1,
                     })
                     .collect::<Vec<Iv>>();
-
-                let
 
             });
 

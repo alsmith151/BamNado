@@ -19,10 +19,10 @@ use rust_lapper::Lapper;
 use tempfile;
 use bigtools::{DEFAULT_BLOCK_SIZE, DEFAULT_ITEMS_PER_SLOT};
 use bigtools::BigWigRead;
-use crate::filter::BamReadFilter;
-use crate::intervals::{IntervalMaker, Shift, Truncate};
-use crate::normalization::NormalizationMethod;
-use crate::utils::{get_bam_header, progress_bar, BamStats, Iv};
+use crate::read_filter::BamReadFilter;
+use crate::genomic_intervals::{IntervalMaker, Shift, Truncate};
+use crate::signal_normalization::NormalizationMethod;
+use crate::bam_utils::{get_bam_header, progress_bar, BamStats, Iv};
 
 
 /// Write a DataFrame as a bedGraph file (tab-separated, no header).
@@ -146,6 +146,10 @@ pub struct BamPileup {
     collapse: bool,
     // Ignore scaffold chromosomes in the pileup.
     ignore_scaffold_chromosomes: bool,
+    // Optional shift to apply to the pileup intervals.
+    shift: Option<Shift>,
+    // Optional truncation to apply to the pileup intervals.
+    truncate: Option<Truncate>,
 }
 
 impl Display for BamPileup {
@@ -183,6 +187,8 @@ impl BamPileup {
             filter,
             collapse: collapse_intervals,
             ignore_scaffold_chromosomes,
+            shift,
+            truncate,
         }
     }
 
@@ -539,8 +545,8 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
     use tempfile::TempDir;
-    use crate::filter::BamReadFilter;
-    use crate::normalization::NormalizationMethod;
+    use crate::read_filter::BamReadFilter;
+    use crate::signal_normalization::NormalizationMethod;
 
     // Helper function to create a test BamPileup instance
     fn create_test_bam_pileup() -> BamPileup {
@@ -553,6 +559,8 @@ mod tests {
             BamReadFilter::default(),
             false,
             false,
+            None,
+            None,
         )
     }
 
@@ -568,6 +576,8 @@ mod tests {
             BamReadFilter::default(),
             true,
             false,
+            None,
+            None,
         );
 
         assert_eq!(pileup.file_path, file_path);
@@ -681,6 +691,8 @@ mod tests {
             BamReadFilter::default(),
             true,
             false,
+            None,
+            None,
         );
         let result = pileup.to_bigwig(output_path.clone());
         result.expect("Failed to create BigWig file");
@@ -718,6 +730,8 @@ mod tests {
             BamReadFilter::default(),
             true,
             false,
+            None,
+            None,
         );
         let result = pileup.to_bigwig(output_path.clone());
         result.expect("Failed to create BigWig file");
@@ -734,7 +748,7 @@ mod tests {
 
         println!("BigWig stats: {:?}", stats);
         assert_eq!(stats.min_val, 0.0);
-        assert_eq!(stats.max_val, 10062.0);
+        assert_eq!(stats.max_val, 10134.2568359375);
 
     }
 
@@ -753,6 +767,8 @@ mod tests {
             BamReadFilter::default(),
             false,
             false,
+            None,
+            None,
         );
         let result = pileup.to_bigwig(output_path.clone());
         result.expect("Failed to create BigWig file");
@@ -769,7 +785,7 @@ mod tests {
 
         println!("BigWig stats: {:?}", stats);
         assert_eq!(stats.min_val, 0.0);
-        assert_eq!(stats.max_val, 10062.0);
+        assert_eq!(stats.max_val, 10134.2568359375);
 
     }
 

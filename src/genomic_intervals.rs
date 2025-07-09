@@ -8,7 +8,7 @@ use noodles::sam::alignment::RecordBuf;
 use noodles::sam::alignment::record::Cigar;
 use noodles::{bam, sam};
 use sam::alignment::record::cigar::op::Kind;
-use crate::filter::BamReadFilter;
+use crate::read_filter::BamReadFilter;
 
 /// Returns the alignment span of a CIGAR operation.
 /// # Arguments
@@ -169,11 +169,7 @@ impl FromStr for Truncate {
 
 
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct CoordinateModification {
-    shift: Shift,
-    truncate: Truncate,
-}
+
 pub struct IntervalMaker<'a> {
     read: bam::Record,
     header: &'a sam::Header,
@@ -285,7 +281,8 @@ impl<'a> IntervalMaker<'a> {
                 } else {
                     end = end.saturating_sub((-self.shift.five_prime_reverse) as usize);
                 }
-                self.shift.five_prime_reverse.abs() + self.shift.three_prime.abs()
+                // For reverse reads, the template length change is the sum of the applied shifts
+                self.shift.five_prime_reverse + self.shift.three_prime
             }
             (true, false) => {
                 // Reverse second read: use reverse-specific shifts
@@ -299,7 +296,7 @@ impl<'a> IntervalMaker<'a> {
                 } else {
                     end = end.saturating_sub((-self.shift.five_prime_reverse) as usize);
                 }
-                self.shift.five_prime_reverse.abs() + self.shift.three_prime_reverse.abs()
+                self.shift.five_prime_reverse + self.shift.three_prime_reverse
             }
             (false, true) => {
                 // Forward first read: direct application of shifts
@@ -313,7 +310,7 @@ impl<'a> IntervalMaker<'a> {
                 } else {
                     end = end.saturating_sub((-self.shift.three_prime) as usize);
                 }
-                self.shift.five_prime.abs() + self.shift.three_prime.abs()
+                self.shift.five_prime + self.shift.three_prime
             }
             (false, false) => {
                 // Forward second read: mix of forward and reverse shifts
@@ -327,7 +324,7 @@ impl<'a> IntervalMaker<'a> {
                 } else {
                     end = end.saturating_sub((-self.shift.three_prime_reverse) as usize);
                 }
-                self.shift.five_prime.abs() + self.shift.three_prime_reverse.abs()
+                self.shift.five_prime + self.shift.three_prime_reverse
             }
         };
 
@@ -399,16 +396,23 @@ impl<'a> IntervalMaker<'a> {
 }
 
     pub fn record(&self) -> Option<RecordBuf> {
-        let (start, end, dtlen) = self.coords()?;
+        let (start, _end, dtlen) = self.coords()?;
 
         let mut new_record = RecordBuf::try_from_alignment_record(self.header, &self.read).ok()?;
 
         *new_record.alignment_start_mut() = Position::new(start);
-        *new_record.template_length_mut() = if self.read.template_length() > 0 {
-            self.read.template_length().saturating_add(dtlen)
+        
+        // Update template length based on the delta from coordinate modifications
+        let original_template_length = self.read.template_length();
+        
+        // Apply the delta to the template length, preserving sign
+        let new_template_length = if original_template_length >= 0 {
+            original_template_length.saturating_add(dtlen)
         } else {
-            self.read.template_length().saturating_sub(dtlen)
+            original_template_length.saturating_sub(dtlen)
         };
+        
+        *new_record.template_length_mut() = new_template_length;
 
         Some(new_record)
     }

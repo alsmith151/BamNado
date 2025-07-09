@@ -8,7 +8,7 @@ use std::fmt::Display;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::utils::CB;
+use crate::bam_utils::CB;
 
 #[derive(Debug)]
 pub struct BamReadFilterStats {
