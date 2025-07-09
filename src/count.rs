@@ -17,9 +17,10 @@ use rayon::prelude::*;
 use rust_lapper::Lapper;
 use tempfile;
 
-use crate::filter::BamReadFilter;
-use crate::intervals::IntervalMaker;
-use crate::utils::{get_bam_header, progress_bar, BamStats, Iv, NormalizationMethod};
+use crate::read_filter::BamReadFilter;
+use crate::genomic_intervals::IntervalMaker;
+use crate::bam_utils::{get_bam_header, progress_bar, BamStats, Iv};
+use crate::signal_normalization::NormalizationMethod;
 
 /// Represents a single BAM file pileup settings.
 pub struct BamPileup {
@@ -92,6 +93,7 @@ impl BamPileup {
                             &chromsizes_refid,
                             &self.filter,
                             self.use_fragment,
+                            None,
                             None,
                         )
                         .coords()
@@ -577,7 +579,7 @@ fn pileup_chunk(
     let intervals: Vec<Iv> = records
         .filter_map(Result::ok)
         .filter_map(|record| {
-            IntervalMaker::new(record, &header, &chromsizes_refid, filter, use_fragment, None)
+            IntervalMaker::new(record, &header, &chromsizes_refid, filter, use_fragment, None, None)
                 .coords()
         })
         .map(|(start, end)| Iv {

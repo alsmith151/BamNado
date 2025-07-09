@@ -1,13 +1,14 @@
-pub mod utils;
-pub mod filter;
-pub mod intervals;
-pub mod spikein;
-pub mod pileup;
-pub mod normalization;
-pub mod split;
+pub mod bam_utils;
+pub mod read_filter;
+pub mod genomic_intervals;
+pub mod spike_in_analysis;
+pub mod coverage_analysis;
+pub mod signal_normalization;
+pub mod bam_splitter;
+pub mod bam_modifier;
 
 
-pub use utils::{
+pub use bam_utils::{
     BamStats,
     CellBarcodes,
     CellBarcodesMulti,
