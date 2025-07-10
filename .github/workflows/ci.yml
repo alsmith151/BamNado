@@ -15,13 +15,21 @@ jobs:
       matrix:
         include:
           - target: x86_64-unknown-linux-gnu
-            os: ubuntu-latest
+            os: ubuntu-20.04
             binary-suffix: ""
             archive-suffix: "linux-x86_64"
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-20.04
+            binary-suffix: ""
+            archive-suffix: "linux-x86_64-musl"
           - target: aarch64-unknown-linux-gnu
-            os: ubuntu-latest
+            os: ubuntu-20.04
             binary-suffix: ""
             archive-suffix: "linux-aarch64"
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-20.04
+            binary-suffix: ""
+            archive-suffix: "linux-aarch64-musl"
           - target: x86_64-apple-darwin
             os: macos-latest
             binary-suffix: ""
@@ -56,12 +64,34 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y gcc-aarch64-linux-gnu
 
+      - name: Install musl tools
+        if: contains(matrix.target, 'musl')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+          if [[ "${{ matrix.target }}" == "aarch64-unknown-linux-musl" ]]; then
+            sudo apt-get install -y gcc-aarch64-linux-gnu
+          fi
+
       - name: Configure cross-compilation (Linux aarch64)
         if: matrix.target == 'aarch64-unknown-linux-gnu'
         run: |
           mkdir -p ~/.cargo
           echo "[target.aarch64-unknown-linux-gnu]" >> ~/.cargo/config.toml
           echo "linker = \"aarch64-linux-gnu-gcc\"" >> ~/.cargo/config.toml
+
+      - name: Configure cross-compilation (musl targets)
+        if: contains(matrix.target, 'musl')
+        run: |
+          mkdir -p ~/.cargo
+          if [[ "${{ matrix.target }}" == "aarch64-unknown-linux-musl" ]]; then
+            echo "[target.aarch64-unknown-linux-musl]" >> ~/.cargo/config.toml
+            echo "linker = \"aarch64-linux-gnu-gcc\"" >> ~/.cargo/config.toml
+            echo "rustflags = [\"-C\", \"target-feature=+crt-static\"]" >> ~/.cargo/config.toml
+          else
+            echo "[target.x86_64-unknown-linux-musl]" >> ~/.cargo/config.toml
+            echo "rustflags = [\"-C\", \"target-feature=+crt-static\"]" >> ~/.cargo/config.toml
+          fi
 
       - run: |
           cargo check --target ${{ matrix.target }}
@@ -75,7 +105,7 @@ jobs:
 
   test:
     name: Run tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-20.04
     steps:
       - uses: actions/checkout@v4
 
@@ -152,7 +182,9 @@ jobs:
           mkdir -p release-assets
           # Copy and rename binaries with proper extensions
           cp artifacts/bamnado-linux-x86_64/bamnado release-assets/bamnado-linux-x86_64
+          cp artifacts/bamnado-linux-x86_64-musl/bamnado release-assets/bamnado-linux-x86_64-musl
           cp artifacts/bamnado-linux-aarch64/bamnado release-assets/bamnado-linux-aarch64
+          cp artifacts/bamnado-linux-aarch64-musl/bamnado release-assets/bamnado-linux-aarch64-musl
           cp artifacts/bamnado-macos-x86_64/bamnado release-assets/bamnado-macos-x86_64
           cp artifacts/bamnado-macos-aarch64/bamnado release-assets/bamnado-macos-aarch64
           cp artifacts/bamnado-windows-x86_64/bamnado.exe release-assets/bamnado-windows-x86_64.exe
