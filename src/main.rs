@@ -281,7 +281,7 @@ fn create_filter_from_options(
         _ => None,
     };
 
-    println!("Blacklisted locations: {:?}", blacklisted_locations);
+    println!("Blacklisted locations: {blacklisted_locations:?}");
 
     Ok(bamnado::read_filter::BamReadFilter::new(
         filter_options.strand.into(),
@@ -300,7 +300,7 @@ fn process_output_file_type(output: &Path) -> Result<FileType> {
         Some(ext) => match ext.to_str() {
             Some(ext) => FileType::from_str(ext)
                 .map_err(anyhow::Error::msg)
-                .context(format!("Unsupported file extension: {}", ext)),
+                .context(format!("Unsupported file extension: {ext}")),
             None => Err(anyhow::anyhow!("Could not determine file type from extension"))
         },
         None => Err(anyhow::anyhow!("No file extension found"))
