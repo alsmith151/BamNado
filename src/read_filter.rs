@@ -30,6 +30,12 @@ pub struct BamReadFilterStats {
     n_incorrect_strand: AtomicU64,
 }
 
+impl Default for BamReadFilterStats {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl BamReadFilterStats {
     pub fn new() -> Self {
         Self {
@@ -72,7 +78,7 @@ pub struct BamReadFilterStatsSnapshot {
 
 impl Display for BamReadFilterStatsSnapshot {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "")?;
+        writeln!(f)?;
         writeln!(f, "Total reads: {}", self.n_total)?;
         writeln!(f, "Failed proper pair: {}", self.n_failed_proper_pair)?;
         writeln!(f, "Failed mapping quality: {}", self.n_failed_mapq)?;
@@ -132,7 +138,7 @@ impl Display for BamReadFilter {
                 writeln!(
                     f,
                     "\tNumber of Blacklisted locations: {}",
-                    blacklisted_locations.iter().map(|(_, v)| v.len()).sum::<usize>()
+                    blacklisted_locations.values().map(|v| v.len()).sum::<usize>()
                 )?;
             }
             None => {
@@ -185,7 +191,7 @@ impl BamReadFilter {
     ) -> Self {
         let min_mapq = min_mapq.unwrap_or(0);
         let min_length = min_length.unwrap_or(0);
-        let max_length = max_length.unwrap_or(std::u32::MAX);
+        let max_length = max_length.unwrap_or(u32::MAX);
 
         Self {
             strand,

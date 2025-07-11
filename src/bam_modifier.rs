@@ -1,20 +1,20 @@
-use crate::bam_utils::BamStats;
+
 use crate::bam_utils::get_bam_header;
-use crate::genomic_intervals;
-use crate::genomic_intervals::{IntervalMaker, Shift};
+
+
 use crate::read_filter::BamReadFilter;
 use anyhow::Context;
 use anyhow::Result;
-use crossbeam::channel::unbounded;
+
 use indicatif::ProgressBar;
-use log::{debug, info, warn};
+use log::warn;
 
 use noodles::bam::r#async::io::{Reader as AsyncReader, Writer as AsyncWriter};
 use noodles::bam::bai;
 use noodles::core::{Position, Region};
-use noodles::sam::header::record::value::{Map, map::ReferenceSequence};
-use noodles::{bam, sam};
-use rayon::iter::{IntoParallelIterator, ParallelIterator};
+
+
+
 use std::path::PathBuf;
 
 use futures::TryStreamExt;
@@ -46,7 +46,7 @@ impl BamModifier {
 
         let header = match header {
             Ok(header) => header,
-            Err(e) => get_bam_header(&filepath)?,
+            Err(_e) => get_bam_header(&filepath)?,
         };
 
         let index_path = self.filepath.with_extension("bam.bai");

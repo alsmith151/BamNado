@@ -1,20 +1,16 @@
 use ahash::{HashMap, HashSet};
 use anyhow::{Context, Result};
 use bio_types::annot::contig::Contig;
-use bio_types::annot::loc::Loc;
 use bio_types::strand::ReqStrand;
-use log::{debug, info, warn};
+use log::{debug, info};
 
 use noodles::core::{Position, Region};
 use noodles::{bam, sam, bed};
-use noodles::sam::alignment::record::data::field::tag::Tag;
 use polars::prelude::*;
 use rust_lapper::Interval;
 use rust_lapper::Lapper;
-use std::io::{BufRead, Write};
 use std::ops::Bound;
 use std::path::{Path, PathBuf};
-use regex::Regex;
 use std::str::FromStr;
 use bio_types::strand::Strand as BioStrand;
 
@@ -37,7 +33,7 @@ impl FromStr for Strand {
             "forward" => Ok(Strand::Forward),
             "reverse" => Ok(Strand::Reverse),
             "both" => Ok(Strand::Both),
-            _ => Err(format!("Invalid strand value: {}", s)),
+            _ => Err(format!("Invalid strand value: {s}")),
         }
     }
 }
@@ -51,9 +47,9 @@ impl std::fmt::Display for Strand {
     }
 }
 
-impl Into<BioStrand> for Strand {
-    fn into(self) -> BioStrand {
-        match self {
+impl From<Strand> for BioStrand {
+    fn from(val: Strand) -> Self {
+        match val {
             Strand::Forward => BioStrand::Forward,
             Strand::Reverse => BioStrand::Reverse,
             Strand::Both => BioStrand::Unknown,
@@ -72,7 +68,7 @@ pub fn progress_bar(length: u64, message: String) -> indicatif::ProgressBar {
     .unwrap()
     .progress_chars("##-");
 
-    let progress_bar = indicatif::ProgressBar::new(length as u64);
+    let progress_bar = indicatif::ProgressBar::new(length);
     progress_bar.set_style(progress_style.clone());
     progress_bar.set_message(message);
     progress_bar
@@ -80,6 +76,12 @@ pub fn progress_bar(length: u64, message: String) -> indicatif::ProgressBar {
 
 pub struct CellBarcodes {
     barcodes: HashSet<String>,
+}
+
+impl Default for CellBarcodes {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl CellBarcodes {
@@ -125,6 +127,12 @@ pub struct CellBarcodesMulti {
     barcodes: Vec<HashSet<String>>,
 }
 
+impl Default for CellBarcodesMulti {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CellBarcodesMulti {
     pub fn new() -> Self {
         Self {
@@ -150,7 +158,7 @@ impl CellBarcodesMulti {
 
         let mut barcodes = Vec::new();
 
-        for (i, column) in df.iter().enumerate() {
+        for (_i, column) in df.iter().enumerate() {
             let barcode = column.str().unwrap();
 
             let bc = barcode
@@ -216,10 +224,9 @@ pub fn bam_header(file_path: PathBuf) -> Result<sam::Header> {
                 header_str.replace("@HD\tSO:coordinate\n", "@HD\tVN:1.6\tSO:coordinate\n");
             let header_str = header_string.as_bytes();
             let mut reader = sam::io::Reader::new(header_str);
-            let header = reader
+            reader
                 .read_header()
-                .expect("Failed to read header with samtools");
-            header
+                .expect("Failed to read header with samtools")
         }
     };
     Ok(header)
@@ -328,7 +335,7 @@ impl BamStats {
         let stats = &self.chrom_stats;
         let genome_length = stats.values().map(|x| x.length).sum::<u64>();
         let max_reads_per_bp = self.n_mapped as f64 / genome_length as f64;
-        let genome_chunk_length = f64::from(5e6).min(2e6 / (max_reads_per_bp));
+        let genome_chunk_length = 5e6_f64.min(2e6 / (max_reads_per_bp));
 
         let correction = genome_chunk_length % bin_size as f64;
         let genome_chunk_length = genome_chunk_length - correction;
@@ -341,7 +348,7 @@ impl BamStats {
         let chrom_chunks = self
             .chrom_stats
             .iter()
-            .map(|(chrom, stats)| {
+            .flat_map(|(chrom, stats)| {
                 let mut chunks = Vec::new();
                 let mut chunk_start = 1;
                 let chrom_end = stats.length;
@@ -360,7 +367,6 @@ impl BamStats {
                 }
                 chunks
             })
-            .flatten()
             .collect();
 
         Ok(chrom_chunks)
@@ -464,8 +470,10 @@ pub enum FileType {
     TSV,
 }
 
-impl FileType {
-    pub fn from_str(s: &str) -> Result<FileType, String> {
+impl std::str::FromStr for FileType {
+    type Err = String;
+    
+    fn from_str(s: &str) -> Result<FileType, String> {
         match s.to_lowercase().as_str() {
             "bedgraph" => Ok(FileType::Bedgraph),
             "bdg" => Ok(FileType::Bedgraph),
@@ -473,7 +481,7 @@ impl FileType {
             "bw" => Ok(FileType::Bigwig),
             "tsv" => Ok(FileType::TSV),
             "txt" => Ok(FileType::TSV),
-            _ => Err(format!("Unknown file type: {}", s)),
+            _ => Err(format!("Unknown file type: {s}")),
         }
     }
 }
@@ -502,13 +510,13 @@ pub fn regions_to_lapper(regions: Vec<Region>) -> Result<HashMap<String, Lapper<
         };
 
         let iv = Iv {
-            start: start.into(),
-            stop: end.into(),
+            start,
+            stop: end,
             val: 0,
         };
         intervals
             .entry(chrom.clone())
-            .or_insert(Vec::new())
+            .or_default()
             .push(iv);
     }
 
@@ -525,7 +533,7 @@ pub fn bed_to_lapper(bed: PathBuf) -> Result<HashMap<String, Lapper<usize, u32>>
 
     // Read the bed file and convert it to a lapper
     let reader = std::fs::File::open(bed)?;
-    let mut buf_reader = std::io::BufReader::new(reader);
+    let buf_reader = std::io::BufReader::new(reader);
     let mut bed_reader = bed::io::Reader::<4, _>::new(buf_reader);
     let mut record = bed::Record::default();
     let mut intervals: HashMap<String, Vec<Iv>> = HashMap::default();
@@ -544,7 +552,7 @@ pub fn bed_to_lapper(bed: PathBuf) -> Result<HashMap<String, Lapper<usize, u32>>
         };
         intervals
             .entry(chrom.clone())
-            .or_insert(Vec::new())
+            .or_default()
             .push(iv);
     }
 
@@ -576,7 +584,7 @@ pub fn lapper_chrom_name_to_lapper_chrom_id(
     for (chrom, lap) in lapper.iter() {
         let chrom_id = chrom_id_mapping
             .get(chrom)
-            .ok_or_else(|| anyhow::Error::msg(format!("Chromosome {} not found in BAM file", chrom)))?;
+            .ok_or_else(|| anyhow::Error::msg(format!("Chromosome {chrom} not found in BAM file")))?;
         lapper_chrom_id.insert(*chrom_id, lap.clone());
     }
     Ok(lapper_chrom_id)

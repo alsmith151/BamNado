@@ -20,16 +20,16 @@ fn alignment_span<C>(cigar: &C) -> Result<usize>
 where
     C: Cigar,
 {
-    cigar.iter().fold(Ok(0), |acc, op| {
+    cigar.iter().try_fold(0, |acc, op| {
         let op = op.context("Failed to parse CIGAR operation")?;
         match op.kind() {
             Kind::Match
             | Kind::Insertion
             | Kind::SequenceMatch
             | Kind::Pad
-            | Kind::SequenceMismatch => acc.map(|a| a + op.len()),
-            Kind::Deletion | Kind::Skip => acc,
-            _ => acc, // Ignore other kinds like SoftClip, HardClip, etc.
+            | Kind::SequenceMismatch => Ok(acc + op.len()),
+            Kind::Deletion | Kind::Skip => Ok(acc),
+            _ => Ok(acc), // Ignore other kinds like SoftClip, HardClip, etc.
         }
     })
 }
@@ -123,10 +123,10 @@ impl From<Vec<i32>> for Shift {
             panic!("Shift vector must have exactly 4 elements");
         }
         Self {
-            five_prime: shift[0] as i32,
-            three_prime: shift[1] as i32,
-            five_prime_reverse: shift[2] as i32,
-            three_prime_reverse: shift[3] as i32,
+            five_prime: shift[0],
+            three_prime: shift[1],
+            five_prime_reverse: shift[2],
+            three_prime_reverse: shift[3],
             index: 0,
         }
     }
@@ -196,8 +196,8 @@ impl<'a> IntervalMaker<'a> {
             chromsizes,
             filter,
             use_fragment,
-            shift: shift.map_or_else(|| Shift::from([0, 0, 0, 0]), |s| Shift::from(s)),
-            truncate: truncate,
+            shift: shift.map_or_else(|| Shift::from([0, 0, 0, 0]), Shift::from),
+            truncate,
         }
     }
 
@@ -229,7 +229,7 @@ impl<'a> IntervalMaker<'a> {
                 .ok()?
                 .ok()?
                 .get();
-            let end = start + template_length.abs() as usize;
+            let end = start + template_length.unsigned_abs() as usize;
             Some((start, end, 0))
         } else {
             None

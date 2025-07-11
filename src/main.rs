@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use log::{error, info};
+use log::info;
 use std::{
     io::Write,
     path::{Path, PathBuf},
@@ -275,8 +275,8 @@ fn create_filter_from_options(
 
             Some(lapper)
         }
-        (Some(blacklist), None) => {
-            panic!("Blacklisted locations provided but no BAM stats available");
+        (Some(_blacklist), None) => {
+            return Err(anyhow::anyhow!("Blacklisted locations provided but no BAM stats available"));
         }
         _ => None,
     };
@@ -304,18 +304,6 @@ fn process_output_file_type(output: &PathBuf) -> Result<FileType> {
             None => Err(anyhow::anyhow!("Could not determine file type from extension"))
         },
         None => Err(anyhow::anyhow!("No file extension found"))
-    }
-}
-
-fn check_bedgraph_to_bigwig_tool() -> Result<()> {
-    match std::process::Command::new("bedGraphToBigWig").output() {
-        Ok(_) => {
-            info!("bedGraphToBigWig tool found in PATH");
-            Ok(())
-        }
-        Err(_) => {
-            Err(anyhow::anyhow!("bedGraphToBigWig tool not found in PATH. Please install the tool and try again"))
-        }
     }
 }
 
@@ -500,14 +488,14 @@ fn main() -> Result<()> {
             output,
             exogenous_prefix,
             stats,
-            allow_unknown_mapq,
+            allow_unknown_mapq: _,
             filter_options,
         } => {
             // Validate input BAM file
             validate_bam_file(input)?;
 
             // Create filter
-            let filter = create_filter_from_options(filter_options, None)?;
+            let _filter = create_filter_from_options(filter_options, None)?;
 
             // Create and run BAM splitter
             let mut split = bamnado::spike_in_analysis::BamSplitter::new(

@@ -3,21 +3,21 @@
 //! implementation is parallelized (using Rayon) and uses several libraries to
 //! process genomic intervals and to normalize and aggregate counts.
 use std::fmt::{Display, Formatter, Result as FmtResult};
-use std::ops::Deref;
 use std::path::PathBuf;
-use std::process::Command;
+
 use regex::Regex;
 use ahash::HashMap;
 use anyhow::{Context, Result};
 use indicatif::ParallelProgressIterator;
 use log::{debug, error, info};
-use noodles::{bam, core};
-use polars::lazy::dsl::{col, cols, mean_horizontal, sum_horizontal};
+use noodles::bam;
+use polars::lazy::dsl::col;
 use polars::prelude::*;
 use rayon::prelude::*;
 use rust_lapper::Lapper;
 use tempfile;
 use bigtools::{DEFAULT_BLOCK_SIZE, DEFAULT_ITEMS_PER_SLOT};
+#[cfg(test)]
 use bigtools::BigWigRead;
 use crate::read_filter::BamReadFilter;
 use crate::genomic_intervals::{IntervalMaker, Shift, Truncate};
@@ -26,7 +26,7 @@ use crate::bam_utils::{get_bam_header, progress_bar, BamStats, Iv};
 
 
 /// Write a DataFrame as a bedGraph file (tab-separated, no header).
-fn write_bedgraph(mut df: DataFrame, outfile: PathBuf, ignore_scaffold_chromosomes: bool) -> Result<()> {
+fn write_bedgraph(df: DataFrame, outfile: PathBuf, ignore_scaffold_chromosomes: bool) -> Result<()> {
     // If ignore_scaffold_chromosomes is true, filter out scaffold chromosomes
     let mut df = match ignore_scaffold_chromosomes {
         true => {
@@ -103,30 +103,6 @@ fn collapse_equal_bins(
         .collect()?;
 
     Ok(df)
-}
-
-/// Convert a bedGraph file to BigWig format using the external command
-/// `bedGraphToBigWig`.
-fn convert_bedgraph_to_bigwig(
-    bedgraph_path: &std::path::Path,
-    chromsizes_path: &std::path::Path,
-    outfile: &PathBuf,
-) -> Result<()> {
-    let output = Command::new("bedGraphToBigWig")
-        .arg(bedgraph_path)
-        .arg(chromsizes_path)
-        .arg(outfile)
-        .output()
-        .context("Failed to execute bedGraphToBigWig")?;
-
-    if !output.status.success() {
-        error!("Error converting bedGraph to BigWig:");
-        error!("{}", String::from_utf8_lossy(&output.stderr));
-        anyhow::bail!("Conversion to BigWig failed");
-    } else {
-        info!("BigWig file successfully written to {}", outfile.display());
-    }
-    Ok(())
 }
 
 pub struct BamPileup {
@@ -631,37 +607,6 @@ mod tests {
         assert_eq!(score.as_any_value().try_extract::<u32>().unwrap(), 60);
 
         }
-
-    #[test]
-    fn test_convert_bedgraph_to_bigwig() {
-        let temp_dir = TempDir::new().unwrap();
-        let bedgraph_path = temp_dir.path().join("test.bedgraph");
-        let chromsizes_path = temp_dir.path().join("test.chrom.sizes");
-        let bigwig_path = temp_dir.path().join("test.bw");
-
-        // Create mock bedgraph file
-        std::fs::write(&bedgraph_path, "chr1\t0\t1000\t10\nchr1\t1000\t2000\t20\n").unwrap();
-        
-        // Create mock chromsizes file
-        std::fs::write(&chromsizes_path, "chr1\t2000\n").unwrap();
-
-        // Note: This test will fail if bedGraphToBigWig is not installed
-        // In a real test environment, you might want to mock this or skip the test
-        let result = convert_bedgraph_to_bigwig(&bedgraph_path, &chromsizes_path, &bigwig_path);
-        
-        // We expect this to fail in most test environments since bedGraphToBigWig won't be available
-        // The test mainly validates the function structure and error handling
-        match result {
-            Ok(_) => {
-                // If it succeeds, verify the output file was created
-                assert!(bigwig_path.exists());
-            }
-            Err(_) => {
-                // Expected in most test environments - bedGraphToBigWig not available
-                assert!(true);
-            }
-        }
-    }
 
     #[test]
     fn test_bam_pileup_display() {

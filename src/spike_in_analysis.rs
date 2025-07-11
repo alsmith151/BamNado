@@ -1,4 +1,4 @@
-use ahash::{HashMap, HashSet, HashSetExt};
+use ahash::HashMap;
 use serde::ser::SerializeStruct;
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
@@ -7,9 +7,8 @@ use std::prelude::rust_2021::*;
 
 use anyhow::Result;
 use crossbeam::channel::unbounded;
-use log::{error, info};
-use noodles::bam::{self as bam, record::Record};
-use noodles::sam::{self as sam, alignment::RecordBuf, header::Header};
+use log::info;
+use noodles::{bam, sam};
 
 #[derive(Debug, Deserialize)]
 pub struct SplitStats {
@@ -50,7 +49,7 @@ impl SplitStats {
         let spikein_reads = self.n_exogenous as f64;
         let scale_factor = 1.0 / (spikein_reads / 1e6);
         if scale_factor.is_infinite() {
-            1.0 as f64
+            1.0_f64
         } else {
             scale_factor
         }
@@ -63,17 +62,17 @@ impl SplitStats {
 
 impl Display for SplitStats {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Statistics for {}\n", self.filename)?;
-        write!(f, "Total reads: {}\n", self.n_total_reads)?;
-        write!(f, "Endogenous reads: {}\n", self.n_endogenous)?;
-        write!(f, "Exogenous reads: {}\n", self.n_exogenous)?;
-        write!(f, "Both genomes reads: {}\n", self.n_both_genomes)?;
-        write!(f, "\nFiltered reads:\n")?;
-        write!(f, "Unmapped reads: {}\n", self.n_unmapped_reads)?;
-        write!(f, "QC fail reads: {}\n", self.n_qcfail_reads)?;
-        write!(f, "Duplicate reads: {}\n", self.n_duplicate_reads)?;
-        write!(f, "Secondary reads: {}\n", self.n_secondary_reads)?;
-        write!(f, "Low mapping quality reads: {}\n", self.n_low_maq)?;
+        writeln!(f, "Statistics for {}", self.filename)?;
+        writeln!(f, "Total reads: {}", self.n_total_reads)?;
+        writeln!(f, "Endogenous reads: {}", self.n_endogenous)?;
+        writeln!(f, "Exogenous reads: {}", self.n_exogenous)?;
+        writeln!(f, "Both genomes reads: {}", self.n_both_genomes)?;
+        writeln!(f, "\nFiltered reads:")?;
+        writeln!(f, "Unmapped reads: {}", self.n_unmapped_reads)?;
+        writeln!(f, "QC fail reads: {}", self.n_qcfail_reads)?;
+        writeln!(f, "Duplicate reads: {}", self.n_duplicate_reads)?;
+        writeln!(f, "Secondary reads: {}", self.n_secondary_reads)?;
+        writeln!(f, "Low mapping quality reads: {}", self.n_low_maq)?;
 
         Ok(())
     }
@@ -133,7 +132,7 @@ impl BamSplitter {
         exogenous_prefix: String,
     ) -> Result<Self> {
         let mut input_bam: bam::io::Reader<noodles::bgzf::io::Reader<std::fs::File>> =
-            bam::io::reader::Builder::default().build_from_path(input_path.clone())?;
+            bam::io::reader::Builder.build_from_path(input_path.clone())?;
 
         let endogenous_path = output_prefix.with_extension("endogenous.bam");
         let exogenous_path = output_prefix.with_extension("exogenous.bam");
@@ -213,7 +212,7 @@ impl BamSplitter {
 
         // Create writer threads for the output BAM files
         let endogenous_writer = std::thread::spawn(move || {
-            let mut writer = bam::io::writer::Builder::default()
+            let mut writer = bam::io::writer::Builder
                 .build_from_path(endogenous_bam)
                 .expect("Failed to create writer");
             writer
@@ -227,7 +226,7 @@ impl BamSplitter {
         });
 
         let exogenous_writer = std::thread::spawn(move || {
-            let mut writer = bam::io::writer::Builder::default()
+            let mut writer = bam::io::writer::Builder
                 .build_from_path(exogenous_bam)
                 .expect("Failed to create writer");
             writer
@@ -241,7 +240,7 @@ impl BamSplitter {
         });
 
         let both_writer = std::thread::spawn(move || {
-            let mut writer = bam::io::writer::Builder::default()
+            let mut writer = bam::io::writer::Builder
                 .build_from_path(both_bam)
                 .expect("Failed to create writer");
             writer
@@ -255,7 +254,7 @@ impl BamSplitter {
         });
 
         let unmapped_writer = std::thread::spawn(move || {
-            let mut writer = bam::io::writer::Builder::default()
+            let mut writer = bam::io::writer::Builder
                 .build_from_path(unmapped_bam)
                 .expect("Failed to create writer");
             writer
@@ -275,7 +274,7 @@ impl BamSplitter {
 
             counter += 1;
             if counter % (1e6 as usize) == 0 {
-                info!("Processed {} reads", counter);
+                info!("Processed {counter} reads");
             }
 
             let is_unmapped = record.flags().is_unmapped();
