@@ -295,7 +295,7 @@ fn create_filter_from_options(
     ))
 }
 
-fn process_output_file_type(output: &PathBuf) -> Result<FileType> {
+fn process_output_file_type(output: &Path) -> Result<FileType> {
     match output.extension() {
         Some(ext) => match ext.to_str() {
             Some(ext) => FileType::from_str(ext)
@@ -349,8 +349,8 @@ fn main() -> Result<()> {
                 filter,
                 true,
                 coverage_options.ignore_scaffold,
-                coverage_options.shift.clone(),
-                coverage_options.truncate.clone(),
+                coverage_options.shift,
+                coverage_options.truncate,
             );
 
             // Determine output file
@@ -432,10 +432,7 @@ fn main() -> Result<()> {
                 };
 
                 // Get specific whitelisted barcodes for this BAM
-                let bam_barcodes = match &whitelisted_barcodes {
-                    Some(whitelist) => Some(whitelist[index].clone()),
-                    None => None,
-                };
+                let bam_barcodes = whitelisted_barcodes.as_ref().map(|whitelist| whitelist[index].clone());
 
                 // Create filter
                 let filter = bamnado::read_filter::BamReadFilter::new(
@@ -459,8 +456,8 @@ fn main() -> Result<()> {
                     filter,
                     false,
                     coverage_options.ignore_scaffold,
-                    coverage_options.shift.clone(),
-                    coverage_options.truncate.clone(),
+                    coverage_options.shift,
+                    coverage_options.truncate,
                 ));
             }
 

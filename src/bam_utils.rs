@@ -158,7 +158,7 @@ impl CellBarcodesMulti {
 
         let mut barcodes = Vec::new();
 
-        for (_i, column) in df.iter().enumerate() {
+        for column in df.iter() {
             let barcode = column.str().unwrap();
 
             let bc = barcode
@@ -267,8 +267,7 @@ impl BamStats {
             .map(|(name, map)| {
                 let name = name.to_string();
                 let length = map.length().get();
-                let contig = Contig::new(name, 1, length, ReqStrand::Forward);
-                contig
+                Contig::new(name, 1, length, ReqStrand::Forward)
             })
          .collect();
 
@@ -640,11 +639,9 @@ where
                 header_str.replace("@HD\tSO:coordinate\n", "@HD\tVN:1.6\tSO:coordinate\n");
             let header_str = header_string.as_bytes();
             let mut reader = sam::io::Reader::new(header_str);
-            let header = reader
+            reader
                 .read_header()
-                .expect("Failed to read header with samtools");
-
-            header
+                .expect("Failed to read header with samtools")
         }
     };
     Ok(header)

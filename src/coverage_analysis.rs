@@ -35,7 +35,7 @@ fn write_bedgraph(df: DataFrame, outfile: PathBuf, ignore_scaffold_chromosomes: 
                 .column("chrom")?
                 .str()?
                 .iter()
-                .filter_map(|s| s)
+                .flatten()
                 .map(|s| !pattern.is_match(s))
                 .collect::<BooleanChunked>();
             df.filter(&mask)?
@@ -249,7 +249,7 @@ impl BamPileup {
                 let mut start = region_start;
                 while start < region_end {
                     let end = (start + self.bin_size as usize).min(region_end);
-                    let count = lapper.count(start as usize, end as usize);
+                    let count = lapper.count(start, end);
 
                     match self.collapse {
                         true => {
@@ -286,7 +286,7 @@ impl BamPileup {
             })
             // Combine the results from parallel threads.
             .fold(
-                || HashMap::default(),
+                HashMap::default,
                 |mut acc, result: Result<(String, Vec<Iv>)>| {
                     if let Ok((chrom, intervals)) = result {
                         acc.entry(chrom).or_insert_with(Vec::new).extend(intervals);
@@ -295,10 +295,10 @@ impl BamPileup {
                 },
             )
             .reduce(
-                || HashMap::default(),
+                HashMap::default,
                 |mut acc, map| {
                     for (key, mut value) in map {
-                        acc.entry(key).or_insert_with(Vec::new).append(&mut value);
+                        acc.entry(key).or_default().append(&mut value);
                     }
                     acc
                 },
@@ -329,7 +329,7 @@ impl BamPileup {
                 for iv in intervals {
                     start_vec.push(iv.start as u64);
                     end_vec.push(iv.stop as u64);
-                    score_vec.push(iv.val as u32);
+                    score_vec.push(iv.val);
                 }
                 // Create the chrom vector by repeating the chromosome name.
                 let chrom_vec = vec![chrom; n];
@@ -450,7 +450,7 @@ impl MultiBamPileup {
 
         // Check that all BAM pileups have the collapse option set to false
         let collapse: Vec<bool> = self.bam_pileups.iter().map(|p| p.collapse).collect();
-        if collapse.iter().all(|x| *x == false) {
+        if collapse.iter().all(|x| !(*x)) {
             debug!("All BAM pileups have collapse set to false");
         } else {
             anyhow::bail!("All BAM pileups must have collapse set to false");

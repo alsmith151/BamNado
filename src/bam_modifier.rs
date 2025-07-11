@@ -86,8 +86,6 @@ impl BamModifier {
                 }
 
                 if self.tn5_shift {
-                    let record = record;
-
                     if record.flags().is_properly_segmented() {
                         let shift_values = [4, -5, 5, -4];
 

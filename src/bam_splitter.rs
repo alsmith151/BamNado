@@ -123,7 +123,7 @@ impl BamFilterer {
                 .expect("Error reading file");
             let header = get_bam_header(&filepath).expect("Error reading header");
 
-            let mut writer = bam::io::writer::Builder::default()
+            let mut writer = bam::io::writer::Builder {}
                 .build_from_path(outfile)
                 .expect("Error writing to file");
 
@@ -158,7 +158,7 @@ impl BamFilterer {
                     .filter(|record| {
                         self.filter
                             .is_valid(record, Some(&header))
-                            .unwrap_or_else(|_| false)
+                            .unwrap_or(false)
                     })
                     .collect::<Vec<_>>();
 
