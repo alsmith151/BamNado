@@ -15,19 +15,19 @@ jobs:
       matrix:
         include:
           - target: x86_64-unknown-linux-gnu
-            os: ubuntu-20.04
+            os: ubuntu-latest
             binary-suffix: ""
             archive-suffix: "linux-x86_64"
           - target: x86_64-unknown-linux-musl
-            os: ubuntu-20.04
+            os: ubuntu-latest
             binary-suffix: ""
             archive-suffix: "linux-x86_64-musl"
           - target: aarch64-unknown-linux-gnu
-            os: ubuntu-20.04
+            os: ubuntu-latest
             binary-suffix: ""
             archive-suffix: "linux-aarch64"
           - target: aarch64-unknown-linux-musl
-            os: ubuntu-20.04
+            os: ubuntu-latest
             binary-suffix: ""
             archive-suffix: "linux-aarch64-musl"
           - target: x86_64-apple-darwin
@@ -79,6 +79,7 @@ jobs:
           mkdir -p ~/.cargo
           echo "[target.aarch64-unknown-linux-gnu]" >> ~/.cargo/config.toml
           echo "linker = \"aarch64-linux-gnu-gcc\"" >> ~/.cargo/config.toml
+          echo "rustflags = [\"-C\", \"target-feature=+crt-static\", \"-C\", \"link-arg=-static\"]" >> ~/.cargo/config.toml
 
       - name: Configure cross-compilation (musl targets)
         if: contains(matrix.target, 'musl')
@@ -87,11 +88,32 @@ jobs:
           if [[ "${{ matrix.target }}" == "aarch64-unknown-linux-musl" ]]; then
             echo "[target.aarch64-unknown-linux-musl]" >> ~/.cargo/config.toml
             echo "linker = \"aarch64-linux-gnu-gcc\"" >> ~/.cargo/config.toml
-            echo "rustflags = [\"-C\", \"target-feature=+crt-static\"]" >> ~/.cargo/config.toml
+            echo "rustflags = [\"-C\", \"target-feature=+crt-static\", \"-C\", \"link-arg=-static\"]" >> ~/.cargo/config.toml
           else
             echo "[target.x86_64-unknown-linux-musl]" >> ~/.cargo/config.toml
-            echo "rustflags = [\"-C\", \"target-feature=+crt-static\"]" >> ~/.cargo/config.toml
+            echo "rustflags = [\"-C\", \"target-feature=+crt-static\", \"-C\", \"link-arg=-static\"]" >> ~/.cargo/config.toml
           fi
+
+      - name: Configure static linking for other Linux targets
+        if: contains(matrix.target, 'linux') && !contains(matrix.target, 'musl') && matrix.target != 'aarch64-unknown-linux-gnu'
+        run: |
+          mkdir -p ~/.cargo
+          echo "[target.${{ matrix.target }}]" >> ~/.cargo/config.toml
+          echo "rustflags = [\"-C\", \"target-feature=+crt-static\", \"-C\", \"link-arg=-static\"]" >> ~/.cargo/config.toml
+
+      - name: Configure static linking for macOS targets
+        if: contains(matrix.target, 'apple')
+        run: |
+          mkdir -p ~/.cargo
+          echo "[target.${{ matrix.target }}]" >> ~/.cargo/config.toml
+          echo "rustflags = [\"-C\", \"link-arg=-static-libgcc\"]" >> ~/.cargo/config.toml
+
+      - name: Configure static linking for Windows targets
+        if: contains(matrix.target, 'windows')
+        run: |
+          mkdir -p ~/.cargo
+          echo "[target.${{ matrix.target }}]" >> ~/.cargo/config.toml
+          echo "rustflags = [\"-C\", \"target-feature=+crt-static\"]" >> ~/.cargo/config.toml
 
       - run: |
           cargo check --target ${{ matrix.target }}
@@ -105,7 +127,7 @@ jobs:
 
   test:
     name: Run tests
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
