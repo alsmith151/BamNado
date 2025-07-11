@@ -10,7 +10,7 @@ echo "🔧 Setting up pre-commit hooks for BamNado..."
 # Check if pre-commit is installed
 if ! command -v pre-commit &> /dev/null; then
     echo "📦 Installing pre-commit..."
-    
+
     # Try different installation methods
     if command -v pip &> /dev/null; then
         pip install pre-commit

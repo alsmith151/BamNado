@@ -66,9 +66,9 @@ mod tests {
         let cpm_factor = NormalizationMethod::CPM.scale_factor(base_scale, bin_size, n_reads);
         let rpkm_factor = NormalizationMethod::RPKM.scale_factor(base_scale, bin_size, n_reads);
 
-        println!("Raw factor: {}", raw_factor); // Should be 1.0
-        println!("CPM factor: {}", cpm_factor); // Should be 0.1 (1M/10M)
-        println!("RPKM factor: {}", rpkm_factor); // Should be 0.1 (1M/10M * 1000/1K)
+        println!("Raw factor: {raw_factor}"); // Should be 1.0
+        println!("CPM factor: {cpm_factor}"); // Should be 0.1 (1M/10M)
+        println!("RPKM factor: {rpkm_factor}"); // Should be 0.1 (1M/10M * 1000/1K)
 
         // For 1000 reads in a 1kb bin with 10M total reads:
         let raw_value = 1000.0 * raw_factor; // 1000

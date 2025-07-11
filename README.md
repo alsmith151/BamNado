@@ -7,7 +7,7 @@ Make sure to select the binary that matches your operating system and architectu
 Alternatively, you can build the package from source using the following commands:
 
 ```bash
-cargo install bamnado 
+cargo install bamnado
 ```
 
 

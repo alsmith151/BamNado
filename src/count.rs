@@ -17,9 +17,9 @@ use rayon::prelude::*;
 use rust_lapper::Lapper;
 use tempfile;
 
-use crate::read_filter::BamReadFilter;
+use crate::bam_utils::{BamStats, Iv, get_bam_header, progress_bar};
 use crate::genomic_intervals::IntervalMaker;
-use crate::bam_utils::{get_bam_header, progress_bar, BamStats, Iv};
+use crate::read_filter::BamReadFilter;
 use crate::signal_normalization::NormalizationMethod;
 
 /// Represents a single BAM file pileup settings.
@@ -183,8 +183,14 @@ impl BamPileup {
             .into_par_iter()
             .map(|(chrom, intervals)| {
                 let chrom_vec = vec![chrom; intervals.len()];
-                let start_vec = intervals.iter().map(|iv| iv.start as u64).collect::<Vec<_>>();
-                let end_vec = intervals.iter().map(|iv| iv.stop as u64).collect::<Vec<_>>();
+                let start_vec = intervals
+                    .iter()
+                    .map(|iv| iv.start as u64)
+                    .collect::<Vec<_>>();
+                let end_vec = intervals
+                    .iter()
+                    .map(|iv| iv.stop as u64)
+                    .collect::<Vec<_>>();
                 let score_vec = intervals.iter().map(|iv| iv.val as u32).collect::<Vec<_>>();
                 (chrom_vec, start_vec, end_vec, score_vec)
             })
@@ -419,27 +425,29 @@ impl MultiBamPileup {
     /// Aggregate the normalized scores from all BAM files using the selected method.
     fn pileup_aggregated(&self) -> Result<DataFrame> {
         let mut df = self.pileup_normalised()?;
-        
+
         // Score column names are just numbers with score_i format.
         // Make a vector with these names to use in the aggregation.
         let score_cols: Vec<_> = (0..self.file_paths.len())
             .map(|i| format!("score_{}", i))
             // .map(|s| col(s))
             .collect();
-        
+
         // Aggregate the score columns using the selected method.
         let df = match self.aggregation_method {
             AggregationMethod::Sum => df.with_column(
                 df.select(&score_cols)?
-                    .sum_horizontal(NullStrategy::Ignore)?.context("Error summing scores")?
-                    .with_name("score".into())
+                    .sum_horizontal(NullStrategy::Ignore)?
+                    .context("Error summing scores")?
+                    .with_name("score".into()),
             ),
             AggregationMethod::Mean => df.with_column(
                 df.select(&score_cols)?
-                    .mean_horizontal(NullStrategy::Ignore)?.context("Error averaging scores")?
-                    .with_name("score".into())
+                    .mean_horizontal(NullStrategy::Ignore)?
+                    .context("Error averaging scores")?
+                    .with_name("score".into()),
             ),
-        }?; 
+        }?;
         // Remove the original per-file score columns.
         let df = df.drop_many(&score_cols);
         Ok(df)
@@ -498,7 +506,9 @@ fn collapse_equal_bins(mut df: DataFrame) -> Result<DataFrame> {
         .with_name("groups".into())
         .into_column();
 
-    let df = df.with_column(group)?.clone()
+    let df = df
+        .with_column(group)?
+        .clone()
         .lazy()
         .group_by(["groups"])
         .agg(&[
@@ -579,8 +589,16 @@ fn pileup_chunk(
     let intervals: Vec<Iv> = records
         .filter_map(Result::ok)
         .filter_map(|record| {
-            IntervalMaker::new(record, &header, &chromsizes_refid, filter, use_fragment, None, None)
-                .coords()
+            IntervalMaker::new(
+                record,
+                &header,
+                &chromsizes_refid,
+                filter,
+                use_fragment,
+                None,
+                None,
+            )
+            .coords()
         })
         .map(|(start, end)| Iv {
             start,
@@ -616,13 +634,25 @@ fn pileup_chunk(
                 if last.val == count {
                     last.stop = end;
                 } else {
-                    bin_counts.push(Iv { start, stop: end, val: count });
+                    bin_counts.push(Iv {
+                        start,
+                        stop: end,
+                        val: count,
+                    });
                 }
             } else {
-                bin_counts.push(Iv { start, stop: end, val: count });
+                bin_counts.push(Iv {
+                    start,
+                    stop: end,
+                    val: count,
+                });
             }
         } else {
-            bin_counts.push(Iv { start, stop: end, val: count });
+            bin_counts.push(Iv {
+                start,
+                stop: end,
+                val: count,
+            });
         }
         start = end;
     }

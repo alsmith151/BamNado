@@ -217,11 +217,11 @@ jobs:
               *windows-x86_64/*) cp "$file" release-assets/bamnado-windows-x86_64.exe ;;
             esac
           done
-          
+
           # Make binaries executable (except Windows)
           chmod +x release-assets/bamnado-linux-*
           chmod +x release-assets/bamnado-macos-*
-          
+
           # List what we have
           ls -la release-assets/
 

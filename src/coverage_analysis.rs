@@ -552,8 +552,8 @@ mod tests {
         assert_eq!(pileup.file_path, file_path);
         assert_eq!(pileup.bin_size, 1000);
         assert_eq!(pileup.scale_factor, 2.0);
-        assert_eq!(pileup.use_fragment, true);
-        assert_eq!(pileup.collapse, true);
+        assert!(pileup.use_fragment);
+        assert!(pileup.collapse);
     }
 
     #[test]
@@ -605,7 +605,7 @@ mod tests {
     #[test]
     fn test_bam_pileup_display() {
         let pileup = create_test_bam_pileup();
-        let display_str = format!("{}", pileup);
+        let display_str = format!("{pileup}");
 
         assert!(display_str.contains("Pileup Settings:"));
         assert!(display_str.contains("BAM file: test.bam"));
@@ -687,7 +687,7 @@ mod tests {
 
         let stats = bw.get_summary().expect("Failed to get BigWig summary");
 
-        println!("BigWig stats: {:?}", stats);
+        println!("BigWig stats: {stats:?}");
         assert_eq!(stats.min_val, 0.0);
         assert_eq!(stats.max_val, 10134.2568359375);
     }
@@ -726,7 +726,7 @@ mod tests {
 
         let stats = bw.get_summary().expect("Failed to get BigWig summary");
 
-        println!("BigWig stats: {:?}", stats);
+        println!("BigWig stats: {stats:?}");
         assert_eq!(stats.min_val, 0.0);
         assert_eq!(stats.max_val, 10134.2568359375);
     }
