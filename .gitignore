@@ -12,3 +12,6 @@ target/*
 Cargo.lock
 .DS_Store
 test/data/examine_test_data.ipynb
+
+# Pre-commit
+.pre-commit-cache/

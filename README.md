@@ -115,3 +115,64 @@ For more details on available commands and options, run:
 ```bash
 bamnado --help
 ```
+
+## Development
+
+### Pre-commit Hooks
+
+This project uses pre-commit hooks to ensure code quality and consistency. The hooks run the same checks as the CI workflow:
+
+- Code formatting (`cargo fmt`)
+- Linting (`cargo clippy`)
+- Basic checks (`cargo check`)
+- Tests (`cargo test` on push)
+
+#### Quick Setup
+
+Run the setup script to install and configure pre-commit hooks:
+
+```bash
+./setup-precommit.sh
+```
+
+#### Manual Setup
+
+If you prefer to set up pre-commit manually:
+
+```bash
+# Install pre-commit (choose one method)
+pip install pre-commit
+# or: brew install pre-commit
+# or: conda install -c conda-forge pre-commit
+
+# Install the hooks
+pre-commit install
+pre-commit install --hook-type pre-push
+
+# Test the setup
+pre-commit run --all-files
+```
+
+#### Configuration Options
+
+Two pre-commit configurations are available:
+
+- `.pre-commit-config.yaml` - Full checks including `cargo check` on every commit
+- `.pre-commit-config-fast.yaml` - Faster setup with formatting/linting only, tests on push
+
+To use the fast configuration:
+
+```bash
+mv .pre-commit-config.yaml .pre-commit-config-full.yaml
+mv .pre-commit-config-fast.yaml .pre-commit-config.yaml
+pre-commit install
+```
+
+#### Useful Commands
+
+```bash
+pre-commit run --all-files       # Run all hooks on all files
+pre-commit run cargo-fmt         # Run specific hook
+pre-commit autoupdate            # Update hook versions
+pre-commit uninstall             # Remove hooks
+```
