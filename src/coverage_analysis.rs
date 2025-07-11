@@ -287,7 +287,7 @@ impl BamPileup {
             })
             // Combine the results from parallel threads.
             .fold(
-                || HashMap::<String, Vec<Iv>>::default(),
+                HashMap::<String, Vec<Iv>>::default,
                 |mut acc, result: Result<(String, Vec<Iv>)>| {
                     if let Ok((chrom, intervals)) = result {
                         acc.entry(chrom).or_default().extend(intervals);
