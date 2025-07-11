@@ -103,6 +103,7 @@ impl Serialize for SplitStats {
 pub struct BamSplitter {
     // The input BAM file
     input_bam: bam::io::Reader<noodles::bgzf::io::Reader<std::fs::File>>,
+    #[allow(dead_code)]
     input_header: sam::Header,
 
     // The output BAM files

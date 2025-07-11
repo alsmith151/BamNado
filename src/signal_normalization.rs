@@ -9,13 +9,14 @@ pub enum NormalizationMethod {
 }
 
 impl NormalizationMethod {
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Result<NormalizationMethod> {
         match s.to_lowercase().as_str() {
             "raw" => Ok(NormalizationMethod::Raw),
             "rpkm" => Ok(NormalizationMethod::RPKM),
             "cpm" => Ok(NormalizationMethod::CPM),
             _ => {
-                warn!("Unknown normalization method: {}. Defaulting to Raw", s);
+                warn!("Unknown normalization method: {s}. Defaulting to Raw");
                 Ok(NormalizationMethod::Raw)
             }
         }

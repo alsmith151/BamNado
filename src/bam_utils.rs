@@ -174,6 +174,7 @@ impl CellBarcodesMulti {
 }
 
 #[derive(Debug)]
+#[allow(dead_code)]
 struct ChromosomeStats {
     chrom: String,
     length: u64,
@@ -204,8 +205,7 @@ pub fn bam_header(file_path: PathBuf) -> Result<sam::Header> {
         std::result::Result::Ok(header) => header,
         Err(e) => {
             debug!(
-                "Failed to read header using noodels falling back to samtools: {}",
-                e
+                "Failed to read header using noodels falling back to samtools: {e}"
             );
 
             let header_samtools = std::process::Command::new("samtools")
@@ -236,12 +236,14 @@ pub struct BamStats {
     // BAM file stats
 
     // File path
+    #[allow(dead_code)]
     file_path: PathBuf,
 
     // Header
     header: sam::Header,
 
     // Contigs present in the BAM file
+    #[allow(dead_code)]
     contigs: Vec<Contig<String, ReqStrand>>,
 
     // Chromosome stats
@@ -619,8 +621,7 @@ where
         std::result::Result::Ok(header) => header,
         Err(e) => {
             debug!(
-                "Failed to read header using noodels falling back to samtools: {}",
-                e
+                "Failed to read header using noodels falling back to samtools: {e}"
             );
 
             let header_samtools = std::process::Command::new("samtools")

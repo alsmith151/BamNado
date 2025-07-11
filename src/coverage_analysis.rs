@@ -142,6 +142,7 @@ impl Display for BamPileup {
 
 impl BamPileup {
     /// Create a new [`BamPileup`].
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         file_path: PathBuf,
         bin_size: u64,
@@ -175,7 +176,7 @@ impl BamPileup {
         let n_reads = filter_stats.n_reads_after_filtering();
         let normalization_factor = self.norm_method.scale_factor(self.scale_factor, self.bin_size, n_reads);
         // Log the normalization factor.
-        info!("Normalization factor: {}", normalization_factor);
+        info!("Normalization factor: {normalization_factor}");
         normalization_factor
     }
 
@@ -189,8 +190,8 @@ impl BamPileup {
         let chromsizes_refid = bam_stats.chromsizes_ref_id()?;
         let n_total_chunks = genomic_chunks.len();
 
-        info!("{}", self);
-        info!("Processing {} genomic chunks", n_total_chunks);
+        info!("{self}");
+        info!("Processing {n_total_chunks} genomic chunks");
 
         let header = get_bam_header(self.file_path.clone())?;
 
@@ -286,10 +287,10 @@ impl BamPileup {
             })
             // Combine the results from parallel threads.
             .fold(
-                HashMap::default,
+                || HashMap::<String, Vec<Iv>>::default(),
                 |mut acc, result: Result<(String, Vec<Iv>)>| {
                     if let Ok((chrom, intervals)) = result {
-                        acc.entry(chrom).or_insert_with(Vec::new).extend(intervals);
+                        acc.entry(chrom).or_default().extend(intervals);
                     }
                     acc
                 },
@@ -409,7 +410,7 @@ impl BamPileup {
 
         let result = bigtools::utils::cli::bedgraphtobigwig::bedgraphtobigwig(args);
         if let Err(e) = result {
-            error!("Error converting bedGraph to BigWig: {}", e);
+            error!("Error converting bedGraph to BigWig: {e}");
             anyhow::bail!("Conversion to BigWig failed");
         }
         // Clean up temporary files.

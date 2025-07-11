@@ -179,6 +179,7 @@ impl Default for BamReadFilter {
 }
 
 impl BamReadFilter {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         strand: bio_types::strand::Strand,
         proper_pair: bool,

@@ -173,7 +173,7 @@ impl BamModifier {
 
                         }
                     } else {
-                        warn!("Skipping record with invalid alignment start: {:?}", record);
+                        warn!("Skipping record with invalid alignment start: {record:?}");
                     }
                 } else {
                     // Write the record without TN5 shift
