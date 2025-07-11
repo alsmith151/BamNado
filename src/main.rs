@@ -108,7 +108,7 @@ struct CoverageOptions {
     shift: Option<bamnado::genomic_intervals::Shift>,
 
     /// Truncate options for the pileup
-    #[arg(long, default_value = "none")]
+    #[arg(long)]
     truncate: Option<bamnado::genomic_intervals::Truncate>,
 
     /// Ignore scaffold chromosomes
