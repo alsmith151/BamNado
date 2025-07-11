@@ -111,7 +111,7 @@ jobs:
       - name: Configure static linking for Windows targets
         if: contains(matrix.target, 'windows')
         run: |
-          mkdir -p ~/.cargo
+          New-Item -ItemType Directory -Path ~/.cargo -Force
           echo "[target.${{ matrix.target }}]" >> ~/.cargo/config.toml
           echo "rustflags = [\"-C\", \"target-feature=+crt-static\"]" >> ~/.cargo/config.toml
 
