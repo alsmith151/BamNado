@@ -4,20 +4,18 @@ use bio_types::annot::contig::Contig;
 use bio_types::strand::ReqStrand;
 use log::{debug, info};
 
+use bio_types::strand::Strand as BioStrand;
 use noodles::core::{Position, Region};
-use noodles::{bam, sam, bed};
+use noodles::{bam, bed, sam};
 use polars::prelude::*;
 use rust_lapper::Interval;
 use rust_lapper::Lapper;
 use std::ops::Bound;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
-use bio_types::strand::Strand as BioStrand;
 
 pub const CB: [u8; 2] = [b'C', b'B'];
 pub type Iv = Interval<usize, u32>;
-
-
 
 #[derive(Debug, Clone, PartialEq, Eq, Copy)]
 pub enum Strand {
@@ -56,9 +54,6 @@ impl From<Strand> for BioStrand {
         }
     }
 }
-
-
-
 
 pub fn progress_bar(length: u64, message: String) -> indicatif::ProgressBar {
     // Progress bar
@@ -182,7 +177,6 @@ struct ChromosomeStats {
     unmapped: u64,
 }
 
-
 pub fn bam_header(file_path: PathBuf) -> Result<sam::Header> {
     // Read the header of a BAM file
     // If the noodles crate fails to read the header, we fall back to samtools
@@ -204,9 +198,7 @@ pub fn bam_header(file_path: PathBuf) -> Result<sam::Header> {
     let header = match reader.read_header() {
         std::result::Result::Ok(header) => header,
         Err(e) => {
-            debug!(
-                "Failed to read header using noodels falling back to samtools: {e}"
-            );
+            debug!("Failed to read header using noodels falling back to samtools: {e}");
 
             let header_samtools = std::process::Command::new("samtools")
                 .arg("view")
@@ -271,7 +263,7 @@ impl BamStats {
                 let length = map.length().get();
                 Contig::new(name, 1, length, ReqStrand::Forward)
             })
-         .collect();
+            .collect();
 
         // Get the index of the BAM file
         let bam_reader = bam::io::indexed_reader::Builder::default()
@@ -431,12 +423,17 @@ impl BamStats {
         // }
         // Ok(())
 
-
         let chrom_sizes = self.chromsizes_ref_name()?;
         // Convert the chromosome sizes to a DataFrame
         let mut df = DataFrame::new(vec![
-            Column::new("chrom".into(), chrom_sizes.keys().cloned().collect::<Vec<String>>()),
-            Column::new("length".into(), chrom_sizes.values().cloned().collect::<Vec<u64>>()),
+            Column::new(
+                "chrom".into(),
+                chrom_sizes.keys().cloned().collect::<Vec<String>>(),
+            ),
+            Column::new(
+                "length".into(),
+                chrom_sizes.values().cloned().collect::<Vec<u64>>(),
+            ),
         ])?;
 
         // Sort the DataFrame by chromosome name
@@ -450,8 +447,6 @@ impl BamStats {
             .with_separator(b'\t')
             .finish(&mut df)?;
         Ok(())
-
-
     }
 
     pub fn n_mapped(&self) -> u64 {
@@ -473,7 +468,7 @@ pub enum FileType {
 
 impl std::str::FromStr for FileType {
     type Err = String;
-    
+
     fn from_str(s: &str) -> Result<FileType, String> {
         match s.to_lowercase().as_str() {
             "bedgraph" => Ok(FileType::Bedgraph),
@@ -486,8 +481,6 @@ impl std::str::FromStr for FileType {
         }
     }
 }
-
-
 
 pub fn regions_to_lapper(regions: Vec<Region>) -> Result<HashMap<String, Lapper<usize, u32>>> {
     let mut lapper: HashMap<String, Lapper<usize, u32>> = HashMap::default();
@@ -515,10 +508,7 @@ pub fn regions_to_lapper(regions: Vec<Region>) -> Result<HashMap<String, Lapper<
             stop: end,
             val: 0,
         };
-        intervals
-            .entry(chrom.clone())
-            .or_default()
-            .push(iv);
+        intervals.entry(chrom.clone()).or_default().push(iv);
     }
 
     for (chrom, ivs) in intervals.iter() {
@@ -529,9 +519,7 @@ pub fn regions_to_lapper(regions: Vec<Region>) -> Result<HashMap<String, Lapper<
     Ok(lapper)
 }
 
-
 pub fn bed_to_lapper(bed: PathBuf) -> Result<HashMap<String, Lapper<usize, u32>>> {
-
     // Read the bed file and convert it to a lapper
     let reader = std::fs::File::open(bed)?;
     let buf_reader = std::io::BufReader::new(reader);
@@ -540,21 +528,19 @@ pub fn bed_to_lapper(bed: PathBuf) -> Result<HashMap<String, Lapper<usize, u32>>
     let mut intervals: HashMap<String, Vec<Iv>> = HashMap::default();
     let mut lapper: HashMap<String, Lapper<usize, u32>> = HashMap::default();
 
-
     while bed_reader.read_record(&mut record)? != 0 {
         let chrom = record.reference_sequence_name().to_string();
         let start = record.feature_start()?;
-        let end = record.feature_end().context("Failed to get feature end")??;
+        let end = record
+            .feature_end()
+            .context("Failed to get feature end")??;
 
         let iv = Iv {
             start: start.into(),
             stop: end.into(),
             val: 0,
         };
-        intervals
-            .entry(chrom.clone())
-            .or_default()
-            .push(iv);
+        intervals.entry(chrom.clone()).or_default().push(iv);
     }
 
     for (chrom, ivs) in intervals.iter() {
@@ -565,11 +551,9 @@ pub fn bed_to_lapper(bed: PathBuf) -> Result<HashMap<String, Lapper<usize, u32>>
     if lapper.is_empty() {
         return Err(anyhow::Error::msg("Lapper is empty"));
     }
-    
 
     Ok(lapper)
 }
-
 
 /// Convert the chromosome names in the lapper to the chromosome IDs in the BAM file
 /// This is useful for when we want to use the lapper with the BAM file
@@ -578,22 +562,17 @@ pub fn lapper_chrom_name_to_lapper_chrom_id(
     lapper: HashMap<String, Lapper<usize, u32>>,
     bam_stats: &BamStats,
 ) -> Result<HashMap<usize, Lapper<usize, u32>>> {
-
     // Convert the chromosome names in the lapper to the chromosome IDs in the BAM file
     let chrom_id_mapping = bam_stats.chromosome_name_to_id_mapping()?;
     let mut lapper_chrom_id: HashMap<usize, Lapper<usize, u32>> = HashMap::default();
     for (chrom, lap) in lapper.iter() {
-        let chrom_id = chrom_id_mapping
-            .get(chrom)
-            .ok_or_else(|| anyhow::Error::msg(format!("Chromosome {chrom} not found in BAM file")))?;
+        let chrom_id = chrom_id_mapping.get(chrom).ok_or_else(|| {
+            anyhow::Error::msg(format!("Chromosome {chrom} not found in BAM file"))
+        })?;
         lapper_chrom_id.insert(*chrom_id, lap.clone());
     }
     Ok(lapper_chrom_id)
 }
-
-
-
-
 
 /// Get the header of a BAM file
 /// If the noodles crate fails to read the header, we fall back to samtools
@@ -620,9 +599,7 @@ where
     let header = match reader.read_header() {
         std::result::Result::Ok(header) => header,
         Err(e) => {
-            debug!(
-                "Failed to read header using noodels falling back to samtools: {e}"
-            );
+            debug!("Failed to read header using noodels falling back to samtools: {e}");
 
             let header_samtools = std::process::Command::new("samtools")
                 .arg("view")

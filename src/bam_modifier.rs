@@ -1,6 +1,4 @@
-
 use crate::bam_utils::get_bam_header;
-
 
 use crate::read_filter::BamReadFilter;
 use anyhow::Context;
@@ -12,8 +10,6 @@ use log::warn;
 use noodles::bam::r#async::io::{Reader as AsyncReader, Writer as AsyncWriter};
 use noodles::bam::bai;
 use noodles::core::{Position, Region};
-
-
 
 use std::path::PathBuf;
 
@@ -166,11 +162,7 @@ impl BamModifier {
                                 )?);
                             }
 
-
-                            writer
-                                .write_alignment_record(&header, &aln)
-                                .await?;
-
+                            writer.write_alignment_record(&header, &aln).await?;
                         }
                     } else {
                         warn!("Skipping record with invalid alignment start: {record:?}");

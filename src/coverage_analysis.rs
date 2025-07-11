@@ -5,28 +5,31 @@
 use std::fmt::{Display, Formatter, Result as FmtResult};
 use std::path::PathBuf;
 
-use regex::Regex;
+use crate::bam_utils::{BamStats, Iv, get_bam_header, progress_bar};
+use crate::genomic_intervals::{IntervalMaker, Shift, Truncate};
+use crate::read_filter::BamReadFilter;
+use crate::signal_normalization::NormalizationMethod;
 use ahash::HashMap;
 use anyhow::{Context, Result};
+#[cfg(test)]
+use bigtools::BigWigRead;
+use bigtools::{DEFAULT_BLOCK_SIZE, DEFAULT_ITEMS_PER_SLOT};
 use indicatif::ParallelProgressIterator;
 use log::{debug, error, info};
 use noodles::bam;
 use polars::lazy::dsl::col;
 use polars::prelude::*;
 use rayon::prelude::*;
+use regex::Regex;
 use rust_lapper::Lapper;
 use tempfile;
-use bigtools::{DEFAULT_BLOCK_SIZE, DEFAULT_ITEMS_PER_SLOT};
-#[cfg(test)]
-use bigtools::BigWigRead;
-use crate::read_filter::BamReadFilter;
-use crate::genomic_intervals::{IntervalMaker, Shift, Truncate};
-use crate::signal_normalization::NormalizationMethod;
-use crate::bam_utils::{get_bam_header, progress_bar, BamStats, Iv};
-
 
 /// Write a DataFrame as a bedGraph file (tab-separated, no header).
-fn write_bedgraph(df: DataFrame, outfile: PathBuf, ignore_scaffold_chromosomes: bool) -> Result<()> {
+fn write_bedgraph(
+    df: DataFrame,
+    outfile: PathBuf,
+    ignore_scaffold_chromosomes: bool,
+) -> Result<()> {
     // If ignore_scaffold_chromosomes is true, filter out scaffold chromosomes
     let mut df = match ignore_scaffold_chromosomes {
         true => {
@@ -39,10 +42,10 @@ fn write_bedgraph(df: DataFrame, outfile: PathBuf, ignore_scaffold_chromosomes: 
                 .map(|s| !pattern.is_match(s))
                 .collect::<BooleanChunked>();
             df.filter(&mask)?
-        },
+        }
         false => df,
     };
-    
+
     df.sort_in_place(["chrom", "start"], SortMultipleOptions::default())?;
 
     let mut file = std::fs::File::create(outfile)?;
@@ -51,7 +54,6 @@ fn write_bedgraph(df: DataFrame, outfile: PathBuf, ignore_scaffold_chromosomes: 
         .with_separator(b'\t')
         .finish(&mut df)?;
 
-
     Ok(())
 }
 
@@ -59,10 +61,7 @@ fn write_bedgraph(df: DataFrame, outfile: PathBuf, ignore_scaffold_chromosomes: 
 ///
 /// This function reduces the number of rows by merging adjacent bins with the
 /// same score, which can make the output bedGraph file smaller.
-fn collapse_equal_bins(
-    df:  DataFrame,
-    score_columns: Option<Vec<PlSmallStr>>,
-) -> Result<DataFrame> {
+fn collapse_equal_bins(df: DataFrame, score_columns: Option<Vec<PlSmallStr>>) -> Result<DataFrame> {
     let mut df = df.sort(["chrom", "start"], Default::default())?;
     let shifted_chromosome = df.column("chrom")?.shift(1);
     let same_chrom = df.column("chrom")?.equal(&shifted_chromosome)?;
@@ -169,12 +168,13 @@ impl BamPileup {
         }
     }
 
-
     pub fn normalization_factor(&self) -> f64 {
         // Calculate the normalization factor based on the normalization method.
         let filter_stats = self.filter.stats();
         let n_reads = filter_stats.n_reads_after_filtering();
-        let normalization_factor = self.norm_method.scale_factor(self.scale_factor, self.bin_size, n_reads);
+        let normalization_factor =
+            self.norm_method
+                .scale_factor(self.scale_factor, self.bin_size, n_reads);
         // Log the normalization factor.
         info!("Normalization factor: {normalization_factor}");
         normalization_factor
@@ -295,15 +295,12 @@ impl BamPileup {
                     acc
                 },
             )
-            .reduce(
-                HashMap::default,
-                |mut acc, map| {
-                    for (key, mut value) in map {
-                        acc.entry(key).or_default().append(&mut value);
-                    }
-                    acc
-                },
-            );
+            .reduce(HashMap::default, |mut acc, map| {
+                for (key, mut value) in map {
+                    acc.entry(key).or_default().append(&mut value);
+                }
+                acc
+            });
 
         info!("Pileup complete");
         info!("Read filtering statistics: {}", self.filter.stats());
@@ -316,7 +313,7 @@ impl BamPileup {
     /// The DataFrame will have columns "chrom", "start", "end" and "score".
     fn pileup_to_polars(&self) -> Result<DataFrame> {
         let pileup = self.pileup()?;
-    
+
         // Process each chromosome in parallel and combine into column vectors.
         let (chroms, starts, ends, scores) = pileup
             .into_par_iter()
@@ -347,7 +344,7 @@ impl BamPileup {
                     (chrom_a, start_a, end_a, score_a)
                 },
             );
-    
+
         // Build the DataFrame using the combined vectors.
         let df = DataFrame::new(vec![
             Column::new("chrom".into(), chroms),
@@ -357,12 +354,12 @@ impl BamPileup {
         ])?;
         Ok(df)
     }
-    
 
     /// Normalize the pileup signal using the provided normalization method.
     fn pileup_normalised(&self) -> Result<DataFrame> {
         let mut df = self.pileup_to_polars()?;
-        let norm_scores = df.column("score")?.cast(&DataType::Float64)? * self.normalization_factor();
+        let norm_scores =
+            df.column("score")?.cast(&DataType::Float64)? * self.normalization_factor();
         df.with_column(norm_scores)?;
         Ok(df)
     }
@@ -379,8 +376,6 @@ impl BamPileup {
     ///
     /// This function writes a temporary bedGraph file and converts it to BigWig.
     pub fn to_bigwig(&self, outfile: PathBuf) -> Result<()> {
-
-
         let bam_stats = BamStats::new(self.file_path.clone())?;
         let chromsizes_file = tempfile::NamedTempFile::new()?;
         let chromsizes_path = chromsizes_file.path();
@@ -390,13 +385,13 @@ impl BamPileup {
         let bedgraph_path = bedgraph_file.path();
         self.to_bedgraph(bedgraph_path.to_path_buf())?;
 
-        let args = bigtools::utils::cli::bedgraphtobigwig::BedGraphToBigWigArgs{
-            bedgraph:bedgraph_path.to_path_buf().to_string_lossy().to_string(),
+        let args = bigtools::utils::cli::bedgraphtobigwig::BedGraphToBigWigArgs {
+            bedgraph: bedgraph_path.to_path_buf().to_string_lossy().to_string(),
             chromsizes: chromsizes_path.to_path_buf().to_string_lossy().to_string(),
             output: outfile.to_string_lossy().to_string(),
             parallel: "auto".to_string(),
             single_pass: true,
-            write_args: bigtools::utils::cli::BBIWriteArgs{
+            write_args: bigtools::utils::cli::BBIWriteArgs {
                 nthreads: 6,
                 nzooms: 10,
                 uncompressed: false,
@@ -419,7 +414,6 @@ impl BamPileup {
         // Log success.
         info!("BigWig file successfully written to {}", outfile.display());
         Ok(())
-        
     }
 }
 
@@ -490,12 +484,14 @@ impl MultiBamPileup {
             .map(|(df, n)| df.column("score").unwrap().clone().with_name(n.clone()))
             .collect::<Vec<Column>>();
         let scores_df = DataFrame::new(scores)?.lazy();
-        let df = df.join(
-            scores_df,
-            [col("chrom"), col("start"), col("end")],
-            [col("chrom"), col("start"), col("end")],
-            JoinArgs::new(JoinType::Full),
-        ).collect()?;
+        let df = df
+            .join(
+                scores_df,
+                [col("chrom"), col("start"), col("end")],
+                [col("chrom"), col("start"), col("end")],
+                JoinArgs::new(JoinType::Full),
+            )
+            .collect()?;
         let df = collapse_equal_bins(df, Some(names))?;
 
         Ok(df)
@@ -511,19 +507,15 @@ impl MultiBamPileup {
 
         Ok(())
     }
-
-
 }
-
-
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
-    use tempfile::TempDir;
     use crate::read_filter::BamReadFilter;
     use crate::signal_normalization::NormalizationMethod;
+    use std::path::PathBuf;
+    use tempfile::TempDir;
 
     // Helper function to create a test BamPileup instance
     fn create_test_bam_pileup() -> BamPileup {
@@ -575,7 +567,8 @@ mod tests {
             Column::new("start".into(), vec![0u64, 1000u64, 0u64]),
             Column::new("end".into(), vec![1000u64, 2000u64, 1000u64]),
             Column::new("score".into(), vec![10u32, 20u32, 15u32]),
-        ]).unwrap();
+        ])
+        .unwrap();
 
         let result = write_bedgraph(df, output_path.clone(), true);
         assert!(result.is_ok());
@@ -595,25 +588,25 @@ mod tests {
             Column::new("start".into(), vec![0u64, 1000u64, 2000u64, 3000u64]),
             Column::new("end".into(), vec![1000u64, 2000u64, 3000u64, 4000u64]),
             Column::new("score".into(), vec![10u32, 10u32, 20u32, 20u32]),
-        ]).unwrap();
+        ])
+        .unwrap();
 
         let result = collapse_equal_bins(df, None).unwrap();
-        
+
         // Should collapse adjacent bins with same scores
         assert!(result.height() < 4);
-        
+
         // Verify the collapsed bins have correct aggregated values
         let score_col = result.column("score").unwrap();
         let score = score_col.sum_reduce().expect("Failed to sum scores");
         assert_eq!(score.as_any_value().try_extract::<u32>().unwrap(), 60);
-
-        }
+    }
 
     #[test]
     fn test_bam_pileup_display() {
         let pileup = create_test_bam_pileup();
         let display_str = format!("{}", pileup);
-        
+
         assert!(display_str.contains("Pileup Settings:"));
         assert!(display_str.contains("BAM file: test.bam"));
         assert!(display_str.contains("Bin size: 1000"));
@@ -624,7 +617,11 @@ mod tests {
 
     #[test]
     fn test_bam_to_bigwig_raw_scale() {
-        let test_data_dir = PathBuf::from(file!()).ancestors().nth(2).unwrap().join("test/data");
+        let test_data_dir = PathBuf::from(file!())
+            .ancestors()
+            .nth(2)
+            .unwrap()
+            .join("test/data");
         let temp_dir = TempDir::new().unwrap();
         let bam_file = test_data_dir.join("test.bam");
         let output_path = temp_dir.path().join("test.bw");
@@ -650,20 +647,19 @@ mod tests {
         assert!(bw.is_ok(), "Failed to open BigWig file");
         let mut bw = bw.unwrap();
 
-        let stats = bw.get_summary()
-            .expect("Failed to get BigWig summary");
-
+        let stats = bw.get_summary().expect("Failed to get BigWig summary");
 
         assert_eq!(stats.min_val, 0.0);
         assert_eq!(stats.max_val, 117.0);
-
     }
 
-
     #[test]
-    fn test_bam_to_bigwig_cpm_scale(){
-
-        let test_data_dir = PathBuf::from(file!()).ancestors().nth(2).unwrap().join("test/data");
+    fn test_bam_to_bigwig_cpm_scale() {
+        let test_data_dir = PathBuf::from(file!())
+            .ancestors()
+            .nth(2)
+            .unwrap()
+            .join("test/data");
         let temp_dir = TempDir::new().unwrap();
         let bam_file = test_data_dir.join("test.bam");
         let output_path = temp_dir.path().join("test_cpm.bw");
@@ -689,18 +685,20 @@ mod tests {
         assert!(bw.is_ok(), "Failed to open BigWig file");
         let mut bw = bw.unwrap();
 
-        let stats = bw.get_summary()
-            .expect("Failed to get BigWig summary");
+        let stats = bw.get_summary().expect("Failed to get BigWig summary");
 
         println!("BigWig stats: {:?}", stats);
         assert_eq!(stats.min_val, 0.0);
         assert_eq!(stats.max_val, 10134.2568359375);
-
     }
 
     #[test]
-    fn test_bam_to_bigwig_rpkm_scale(){
-        let test_data_dir = PathBuf::from(file!()).ancestors().nth(2).unwrap().join("test/data");
+    fn test_bam_to_bigwig_rpkm_scale() {
+        let test_data_dir = PathBuf::from(file!())
+            .ancestors()
+            .nth(2)
+            .unwrap()
+            .join("test/data");
         let temp_dir = TempDir::new().unwrap();
         let bam_file = test_data_dir.join("test.bam");
         let output_path = temp_dir.path().join("test_rpkm.bw");
@@ -726,13 +724,10 @@ mod tests {
         assert!(bw.is_ok(), "Failed to open BigWig file");
         let mut bw = bw.unwrap();
 
-        let stats = bw.get_summary()
-            .expect("Failed to get BigWig summary");
+        let stats = bw.get_summary().expect("Failed to get BigWig summary");
 
         println!("BigWig stats: {:?}", stats);
         assert_eq!(stats.min_val, 0.0);
         assert_eq!(stats.max_val, 10134.2568359375);
-
     }
-
 }

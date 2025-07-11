@@ -1,15 +1,14 @@
-use crate::read_filter::BamReadFilter;
-use crate::bam_utils::get_bam_header;
 use crate::bam_utils::BamStats;
+use crate::bam_utils::get_bam_header;
+use crate::read_filter::BamReadFilter;
 use anyhow::Result;
 use crossbeam::channel::unbounded;
 
 use indicatif::ProgressBar;
 
-
-use noodles::core::{Position, Region};
 use noodles::bam;
 use noodles::bam::bai;
+use noodles::core::{Position, Region};
 
 use noodles::bam::r#async::io::{Reader as AsyncReader, Writer as AsyncWriter};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
@@ -42,9 +41,7 @@ impl BamFilterer {
 
         let header = match header {
             Ok(header) => header,
-            Err(_e) => {
-               get_bam_header(&filepath)?
-            }
+            Err(_e) => get_bam_header(&filepath)?,
         };
 
         let index_path = self.filepath.with_extension("bam.bai");
@@ -69,7 +66,6 @@ impl BamFilterer {
             Region::new(name.to_string(), start..=end)
         });
 
-
         let progress = ProgressBar::new(chromsizes.len() as u64);
 
         for region in query_regions {
@@ -88,8 +84,6 @@ impl BamFilterer {
 
         progress.finish();
         writer.shutdown().await?;
-
-
 
         Ok(())
     }
@@ -155,11 +149,7 @@ impl BamFilterer {
                 let filtered_records = records
                     .into_iter()
                     .filter_map(|r| r.is_ok().then(|| r.unwrap()))
-                    .filter(|record| {
-                        self.filter
-                            .is_valid(record, Some(&header))
-                            .unwrap_or(false)
-                    })
+                    .filter(|record| self.filter.is_valid(record, Some(&header)).unwrap_or(false))
                     .collect::<Vec<_>>();
 
                 tx.send(filtered_records).expect("Error sending records");
