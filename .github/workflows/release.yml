@@ -1,0 +1,236 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  CARGO_NET_RETRY: 10
+  RUST_BACKTRACE: short
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            binary-suffix: ""
+            archive-suffix: "linux-x86_64"
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            binary-suffix: ""
+            archive-suffix: "linux-x86_64-musl"
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            binary-suffix: ""
+            archive-suffix: "linux-aarch64"
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-latest
+            binary-suffix: ""
+            archive-suffix: "linux-aarch64-musl"
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            binary-suffix: ""
+            archive-suffix: "macos-x86_64"
+          - target: aarch64-apple-darwin
+            os: macos-14
+            binary-suffix: ""
+            archive-suffix: "macos-aarch64"
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            binary-suffix: ".exe"
+            archive-suffix: "windows-x86_64"
+
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Pre-warm dependency cache
+        run: |
+          cargo fetch --target ${{ matrix.target }}
+
+      - run: rustup toolchain install stable --profile minimal --no-self-update
+
+      - run: rustup target add ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+          cache-targets: "true"
+          cache-all-crates: "true"
+          shared-key: "release"
+
+      - name: Install cross-compilation tools (Linux aarch64)
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Install musl tools
+        if: contains(matrix.target, 'musl')
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y musl-tools
+          if [[ "${{ matrix.target }}" == "aarch64-unknown-linux-musl" ]]; then
+            sudo apt-get install -y gcc-aarch64-linux-gnu
+          fi
+
+      - name: Configure cross-compilation (Linux aarch64)
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          mkdir -p ~/.cargo
+          echo "[target.aarch64-unknown-linux-gnu]" >> ~/.cargo/config.toml
+          echo "linker = \"aarch64-linux-gnu-gcc\"" >> ~/.cargo/config.toml
+          echo "rustflags = [\"-C\", \"target-feature=+crt-static\", \"-C\", \"link-arg=-static\"]" >> ~/.cargo/config.toml
+
+      - name: Configure cross-compilation (musl targets)
+        if: contains(matrix.target, 'musl')
+        run: |
+          mkdir -p ~/.cargo
+          if [[ "${{ matrix.target }}" == "aarch64-unknown-linux-musl" ]]; then
+            echo "[target.aarch64-unknown-linux-musl]" >> ~/.cargo/config.toml
+            echo "linker = \"aarch64-linux-gnu-gcc\"" >> ~/.cargo/config.toml
+            echo "rustflags = [\"-C\", \"target-feature=+crt-static\", \"-C\", \"link-arg=-static\"]" >> ~/.cargo/config.toml
+          else
+            echo "[target.x86_64-unknown-linux-musl]" >> ~/.cargo/config.toml
+            echo "rustflags = [\"-C\", \"target-feature=+crt-static\", \"-C\", \"link-arg=-static\"]" >> ~/.cargo/config.toml
+          fi
+
+      - name: Configure static linking for other Linux targets
+        if: contains(matrix.target, 'linux') && !contains(matrix.target, 'musl') && matrix.target != 'aarch64-unknown-linux-gnu'
+        run: |
+          mkdir -p ~/.cargo
+          echo "[target.${{ matrix.target }}]" >> ~/.cargo/config.toml
+          echo "rustflags = [\"-C\", \"target-feature=+crt-static\", \"-C\", \"link-arg=-static\"]" >> ~/.cargo/config.toml
+
+      - name: Configure static linking for macOS targets
+        if: contains(matrix.target, 'apple')
+        run: |
+          mkdir -p ~/.cargo
+          echo "[target.${{ matrix.target }}]" >> ~/.cargo/config.toml
+          echo "rustflags = [\"-C\", \"link-arg=-static-libgcc\"]" >> ~/.cargo/config.toml
+
+      - name: Configure static linking for Windows targets
+        if: contains(matrix.target, 'windows')
+        run: |
+          New-Item -ItemType Directory -Path ~/.cargo -Force
+          Add-Content -Path ~/.cargo/config.toml -Value "[target.${{ matrix.target }}]"
+          Add-Content -Path ~/.cargo/config.toml -Value 'rustflags = ["-C", "target-feature=+crt-static"]'
+
+      - name: Build release binary
+        run: |
+          cargo build --release --target ${{ matrix.target }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bamnado-${{ matrix.archive-suffix }}
+          path: target/${{ matrix.target }}/release/bamnado${{ matrix.binary-suffix }}
+
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    needs: [build]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - run: rustup toolchain install stable --profile minimal --no-self-update
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "release"
+          cache-all-crates: "true"
+
+      - name: Extract version from tag
+        id: get_version
+        run: |
+          TAG=${GITHUB_REF#refs/tags/}
+          VERSION=${TAG#v}
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          echo "TAG=$TAG" >> $GITHUB_OUTPUT
+          echo "Extracted version: $VERSION from tag: $TAG"
+
+      - name: Update Cargo.toml version
+        run: |
+          sed -i.bak 's/^version = ".*"/version = "${{ steps.get_version.outputs.VERSION }}"/' Cargo.toml
+          echo "Updated version to ${{ steps.get_version.outputs.VERSION }}"
+          echo "Before:"
+          grep "^version" Cargo.toml.bak || true
+          echo "After:"
+          grep "^version" Cargo.toml
+          # Clean up backup file
+          rm -f Cargo.toml.bak
+
+      - name: Commit version updates
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add Cargo.toml
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "chore: bump version to ${{ steps.get_version.outputs.VERSION }} for release"
+            echo "✓ Committed version updates"
+          fi
+
+      - name: Login into crates.io
+        run: cargo login ${{ secrets.CRATES_IO }}
+
+      - run: |
+          cargo build --release
+          cargo package --allow-dirty
+          cargo publish
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Prepare release assets
+        run: |
+          mkdir -p release-assets
+          # Copy and rename binaries with proper extensions
+          find artifacts -name "bamnado*" -type f | while read file; do
+            case "$file" in
+              *linux-x86_64/*) cp "$file" release-assets/bamnado-linux-x86_64 ;;
+              *linux-x86_64-musl/*) cp "$file" release-assets/bamnado-linux-x86_64-musl ;;
+              *linux-aarch64/*) cp "$file" release-assets/bamnado-linux-aarch64 ;;
+              *linux-aarch64-musl/*) cp "$file" release-assets/bamnado-linux-aarch64-musl ;;
+              *macos-x86_64/*) cp "$file" release-assets/bamnado-macos-x86_64 ;;
+              *macos-aarch64/*) cp "$file" release-assets/bamnado-macos-aarch64 ;;
+              *windows-x86_64/*) cp "$file" release-assets/bamnado-windows-x86_64.exe ;;
+            esac
+          done
+          
+          # Make binaries executable (except Windows)
+          chmod +x release-assets/bamnado-linux-*
+          chmod +x release-assets/bamnado-macos-*
+          
+          # List what we have
+          ls -la release-assets/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: release-assets/*
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
