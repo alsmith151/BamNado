@@ -1,0 +1,55 @@
+repos:
+  # Standard pre-commit hooks
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: check-added-large-files
+
+  # Rust-specific hooks
+  - repo: local
+    hooks:
+      - id: cargo-check
+        name: cargo check
+        entry: cargo check
+        language: system
+        types: [rust]
+        pass_filenames: false
+
+      - id: cargo-clippy
+        name: cargo clippy
+        entry: cargo clippy
+        args: ["--", "-D", "warnings"]
+        language: system
+        types: [rust]
+        pass_filenames: false
+
+      - id: cargo-fmt
+        name: cargo fmt
+        entry: cargo fmt
+        args: ["--", "--check"]
+        language: system
+        types: [rust]
+        pass_filenames: false
+
+      - id: cargo-test
+        name: cargo test
+        entry: cargo test
+        args: ["--all-features"]
+        language: system
+        types: [rust]
+        pass_filenames: false
+        stages: [push]
+
+  # Additional Rust formatting (auto-fix)
+  - repo: https://github.com/doublify/pre-commit-rust
+    rev: v1.0
+    hooks:
+      - id: fmt
+        args: ["--verbose", "--"]
+      - id: clippy
+        args: ["--fix", "--allow-staged", "--allow-dirty", "--", "-D", "warnings"]
