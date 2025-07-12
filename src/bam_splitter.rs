@@ -1,16 +1,15 @@
-use crate::read_filter::BamReadFilter;
-use crate::bam_utils::get_bam_header;
 use crate::bam_utils::BamStats;
+use crate::bam_utils::get_bam_header;
+use crate::read_filter::BamReadFilter;
 use anyhow::Result;
 use crossbeam::channel::unbounded;
-use log::{debug, info, warn};
+
 use indicatif::ProgressBar;
 
-
-use noodles::core::{Position, Region};
-use noodles::{bam, sam};
+use noodles::bam;
 use noodles::bam::bai;
-use noodles::sam::header::record::value::{map::ReferenceSequence, Map};
+use noodles::core::{Position, Region};
+
 use noodles::bam::r#async::io::{Reader as AsyncReader, Writer as AsyncWriter};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use std::path::PathBuf;
@@ -42,9 +41,7 @@ impl BamFilterer {
 
         let header = match header {
             Ok(header) => header,
-            Err(e) => {
-               get_bam_header(&filepath)?
-            }
+            Err(_e) => get_bam_header(&filepath)?,
         };
 
         let index_path = self.filepath.with_extension("bam.bai");
@@ -69,7 +66,6 @@ impl BamFilterer {
             Region::new(name.to_string(), start..=end)
         });
 
-
         let progress = ProgressBar::new(chromsizes.len() as u64);
 
         for region in query_regions {
@@ -89,8 +85,6 @@ impl BamFilterer {
         progress.finish();
         writer.shutdown().await?;
 
-
-
         Ok(())
     }
 
@@ -103,12 +97,12 @@ impl BamFilterer {
         let genomic_chunks = bam_stats.genome_chunks(1e6 as u64)?;
 
         // Set up required variables
-        let chromsizes_refid = bam_stats
+        let _chromsizes_refid = bam_stats
             .chromsizes_ref_id()
             .expect("Error getting chromsizes");
 
         // Iterate over the genomic chunks and pileup the reads
-        let n_total_chunks = genomic_chunks.len();
+        let _n_total_chunks = genomic_chunks.len();
 
         // Start a writing thread
         let outfile = self.output.clone();
@@ -118,12 +112,12 @@ impl BamFilterer {
 
         // Start a writing thread
         let handle = std::thread::spawn(move || {
-            let reader = bam::io::indexed_reader::Builder::default()
+            let _reader = bam::io::indexed_reader::Builder::default()
                 .build_from_path(&filepath)
                 .expect("Error reading file");
             let header = get_bam_header(&filepath).expect("Error reading header");
 
-            let mut writer = bam::io::writer::Builder::default()
+            let mut writer = bam::io::writer::Builder {}
                 .build_from_path(outfile)
                 .expect("Error writing to file");
 
@@ -155,11 +149,7 @@ impl BamFilterer {
                 let filtered_records = records
                     .into_iter()
                     .filter_map(|r| r.is_ok().then(|| r.unwrap()))
-                    .filter(|record| {
-                        self.filter
-                            .is_valid(record, Some(&header))
-                            .unwrap_or_else(|_| false)
-                    })
+                    .filter(|record| self.filter.is_valid(record, Some(&header)).unwrap_or(false))
                     .collect::<Vec<_>>();
 
                 tx.send(filtered_records).expect("Error sending records");

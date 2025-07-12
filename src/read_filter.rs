@@ -1,8 +1,8 @@
 use ahash::{HashMap, HashSet};
 use anyhow::{Context, Result};
 use noodles::sam;
-use noodles::sam::alignment::record::data::field::tag::Tag;
 use noodles::sam::alignment::record::data::field::Value;
+use noodles::sam::alignment::record::data::field::tag::Tag;
 use rust_lapper::Lapper;
 use std::fmt::Display;
 use std::sync::Arc;
@@ -28,6 +28,12 @@ pub struct BamReadFilterStats {
     n_not_in_read_group: AtomicU64,
     // Number of reads filtered by incorrect strand
     n_incorrect_strand: AtomicU64,
+}
+
+impl Default for BamReadFilterStats {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl BamReadFilterStats {
@@ -72,7 +78,7 @@ pub struct BamReadFilterStatsSnapshot {
 
 impl Display for BamReadFilterStatsSnapshot {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "")?;
+        writeln!(f)?;
         writeln!(f, "Total reads: {}", self.n_total)?;
         writeln!(f, "Failed proper pair: {}", self.n_failed_proper_pair)?;
         writeln!(f, "Failed mapping quality: {}", self.n_failed_mapq)?;
@@ -81,18 +87,33 @@ impl Display for BamReadFilterStatsSnapshot {
         writeln!(f, "Failed barcode: {}", self.n_failed_barcode)?;
         writeln!(f, "Not in read group: {}", self.n_not_in_read_group)?;
         writeln!(f, "Incorrect strand: {}", self.n_incorrect_strand)?;
-        writeln!(f, "Filtered reads: {}", self.n_failed_proper_pair + self.n_failed_mapq + self.n_failed_length + self.n_failed_blacklist + self.n_failed_barcode + self.n_not_in_read_group + self.n_incorrect_strand)?;
+        writeln!(
+            f,
+            "Filtered reads: {}",
+            self.n_failed_proper_pair
+                + self.n_failed_mapq
+                + self.n_failed_length
+                + self.n_failed_blacklist
+                + self.n_failed_barcode
+                + self.n_not_in_read_group
+                + self.n_incorrect_strand
+        )?;
         Ok(())
     }
 }
 
 impl BamReadFilterStatsSnapshot {
     pub fn n_reads_after_filtering(&self) -> u64 {
-        self.n_total - (self.n_failed_proper_pair + self.n_failed_mapq + self.n_failed_length + self.n_failed_blacklist + self.n_failed_barcode + self.n_not_in_read_group + self.n_incorrect_strand)
+        self.n_total
+            - (self.n_failed_proper_pair
+                + self.n_failed_mapq
+                + self.n_failed_length
+                + self.n_failed_blacklist
+                + self.n_failed_barcode
+                + self.n_not_in_read_group
+                + self.n_incorrect_strand)
     }
-
 }
-
 
 /// A filter for BAM reads.
 /// Set the minimum mapping quality, minimum and maximum read length, blacklisted locations, and whitelisted barcodes.
@@ -132,7 +153,10 @@ impl Display for BamReadFilter {
                 writeln!(
                     f,
                     "\tNumber of Blacklisted locations: {}",
-                    blacklisted_locations.iter().map(|(_, v)| v.len()).sum::<usize>()
+                    blacklisted_locations
+                        .values()
+                        .map(|v| v.len())
+                        .sum::<usize>()
                 )?;
             }
             None => {
@@ -156,7 +180,6 @@ impl Display for BamReadFilter {
     }
 }
 
-
 impl Default for BamReadFilter {
     fn default() -> Self {
         Self::new(
@@ -173,6 +196,7 @@ impl Default for BamReadFilter {
 }
 
 impl BamReadFilter {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         strand: bio_types::strand::Strand,
         proper_pair: bool,
@@ -185,7 +209,7 @@ impl BamReadFilter {
     ) -> Self {
         let min_mapq = min_mapq.unwrap_or(0);
         let min_length = min_length.unwrap_or(0);
-        let max_length = max_length.unwrap_or(std::u32::MAX);
+        let max_length = max_length.unwrap_or(u32::MAX);
 
         Self {
             strand,
@@ -210,7 +234,9 @@ impl BamReadFilter {
         let flags = match alignment.flags() {
             Ok(flags) => flags,
             Err(_) => {
-                self.stats.n_failed_proper_pair.fetch_add(1, Ordering::Relaxed);
+                self.stats
+                    .n_failed_proper_pair
+                    .fetch_add(1, Ordering::Relaxed);
                 return Ok(false);
             }
         };
@@ -220,14 +246,18 @@ impl BamReadFilter {
             true => {
                 // Read is reverse stranded. If the filter is set for only forward reads we need to return false.
                 if self.strand == bio_types::strand::Strand::Forward {
-                    self.stats.n_incorrect_strand.fetch_add(1, Ordering::Relaxed);
+                    self.stats
+                        .n_incorrect_strand
+                        .fetch_add(1, Ordering::Relaxed);
                     return Ok(false);
                 }
             }
             false => {
                 // Read is forward stranded. If the filter is set for only reverse reads we need to return false.
                 if self.strand == bio_types::strand::Strand::Reverse {
-                    self.stats.n_incorrect_strand.fetch_add(1, Ordering::Relaxed);
+                    self.stats
+                        .n_incorrect_strand
+                        .fetch_add(1, Ordering::Relaxed);
                     return Ok(false);
                 }
             }
@@ -244,7 +274,6 @@ impl BamReadFilter {
             return Ok(false);
         }
 
-
         // Filter by mapping quality.
         match alignment.mapping_quality() {
             Some(Ok(mapping_quality)) => {
@@ -256,13 +285,12 @@ impl BamReadFilter {
             None => {
                 // STAR mapping quality does not match the standard SAM format will just assume it is maximum.
                 // This is a workaround for STAR mappings that do not provide mapping quality.
-            },
+            }
             _ => {
                 self.stats.n_failed_mapq.fetch_add(1, Ordering::Relaxed);
                 return Ok(false);
             }
         }
-
 
         // Filter by read length.
         let alignment_length = alignment.sequence().len();
@@ -274,8 +302,10 @@ impl BamReadFilter {
         }
 
         let header = header.expect("No header provided");
-        let chrom_id = alignment.reference_sequence_id(header).context("Failed to get reference sequence ID")??;
-        
+        let chrom_id = alignment
+            .reference_sequence_id(header)
+            .context("Failed to get reference sequence ID")??;
+
         let start = match alignment.alignment_start() {
             Some(Ok(start)) => start.get(),
             _ => {
@@ -289,7 +319,9 @@ impl BamReadFilter {
         if let Some(blacklisted_locations) = &self.blacklisted_locations {
             if let Some(blacklist) = blacklisted_locations.get(&chrom_id) {
                 if blacklist.count(start, end) > 0 {
-                    self.stats.n_failed_blacklist.fetch_add(1, Ordering::Relaxed);
+                    self.stats
+                        .n_failed_blacklist
+                        .fetch_add(1, Ordering::Relaxed);
                     return Ok(false);
                 }
             }
@@ -314,24 +346,26 @@ impl BamReadFilter {
 
         // Filter by read group.
         if let Some(read_group) = &self.read_group {
-
             let rg = noodles::sam::alignment::record::data::field::tag::Tag::READ_GROUP;
             let data = alignment.data();
             let read_group_value = data.get(&rg).context("Failed to get read group")??;
-            
+
             match read_group_value {
                 Value::String(value) => {
                     if value != read_group {
-                        self.stats.n_not_in_read_group.fetch_add(1, Ordering::Relaxed);
+                        self.stats
+                            .n_not_in_read_group
+                            .fetch_add(1, Ordering::Relaxed);
                         return Ok(false);
                     }
                 }
                 _ => {
-                    self.stats.n_not_in_read_group.fetch_add(1, Ordering::Relaxed);
+                    self.stats
+                        .n_not_in_read_group
+                        .fetch_add(1, Ordering::Relaxed);
                     return Ok(false);
                 }
             }
-
         }
 
         Ok(true)

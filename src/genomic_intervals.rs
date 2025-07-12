@@ -1,6 +1,7 @@
 use std::cmp::min;
 use std::str::FromStr;
 
+use crate::read_filter::BamReadFilter;
 use ahash::HashMap;
 use anyhow::{Context, Result, anyhow};
 use noodles::core::Position;
@@ -8,7 +9,6 @@ use noodles::sam::alignment::RecordBuf;
 use noodles::sam::alignment::record::Cigar;
 use noodles::{bam, sam};
 use sam::alignment::record::cigar::op::Kind;
-use crate::read_filter::BamReadFilter;
 
 /// Returns the alignment span of a CIGAR operation.
 /// # Arguments
@@ -20,16 +20,16 @@ fn alignment_span<C>(cigar: &C) -> Result<usize>
 where
     C: Cigar,
 {
-    cigar.iter().fold(Ok(0), |acc, op| {
+    cigar.iter().try_fold(0, |acc, op| {
         let op = op.context("Failed to parse CIGAR operation")?;
         match op.kind() {
             Kind::Match
             | Kind::Insertion
             | Kind::SequenceMatch
             | Kind::Pad
-            | Kind::SequenceMismatch => acc.map(|a| a + op.len()),
-            Kind::Deletion | Kind::Skip => acc,
-            _ => acc, // Ignore other kinds like SoftClip, HardClip, etc.
+            | Kind::SequenceMismatch => Ok(acc + op.len()),
+            Kind::Deletion | Kind::Skip => Ok(acc),
+            _ => Ok(acc), // Ignore other kinds like SoftClip, HardClip, etc.
         }
     })
 }
@@ -45,7 +45,7 @@ pub struct Shift {
 
 impl Iterator for Shift {
     type Item = i32;
-    
+
     fn next(&mut self) -> Option<Self::Item> {
         match self.index {
             0 => {
@@ -93,7 +93,6 @@ impl FromStr for Shift {
     }
 }
 
-
 impl From<[i32; 4]> for Shift {
     fn from(shift: [i32; 4]) -> Self {
         Self {
@@ -123,10 +122,10 @@ impl From<Vec<i32>> for Shift {
             panic!("Shift vector must have exactly 4 elements");
         }
         Self {
-            five_prime: shift[0] as i32,
-            three_prime: shift[1] as i32,
-            five_prime_reverse: shift[2] as i32,
-            three_prime_reverse: shift[3] as i32,
+            five_prime: shift[0],
+            three_prime: shift[1],
+            five_prime_reverse: shift[2],
+            three_prime_reverse: shift[3],
             index: 0,
         }
     }
@@ -166,10 +165,6 @@ impl FromStr for Truncate {
     }
 }
 
-
-
-
-
 pub struct IntervalMaker<'a> {
     read: bam::Record,
     header: &'a sam::Header,
@@ -196,8 +191,8 @@ impl<'a> IntervalMaker<'a> {
             chromsizes,
             filter,
             use_fragment,
-            shift: shift.map_or_else(|| Shift::from([0, 0, 0, 0]), |s| Shift::from(s)),
-            truncate: truncate,
+            shift: shift.map_or_else(|| Shift::from([0, 0, 0, 0]), Shift::from),
+            truncate,
         }
     }
 
@@ -229,7 +224,7 @@ impl<'a> IntervalMaker<'a> {
                 .ok()?
                 .ok()?
                 .get();
-            let end = start + template_length.abs() as usize;
+            let end = start + template_length.unsigned_abs() as usize;
             Some((start, end, 0))
         } else {
             None
@@ -258,7 +253,8 @@ impl<'a> IntervalMaker<'a> {
         mut start: usize,
         mut end: usize,
         _dtlen: usize,
-    ) -> Result<(usize, usize, i32)> { // Changed return type to i32
+    ) -> Result<(usize, usize, i32)> {
+        // Changed return type to i32
         let reverse = self.read.flags().is_reverse_complemented();
         let first_in_template = self.read.flags().is_first_segment();
 
@@ -346,7 +342,8 @@ impl<'a> IntervalMaker<'a> {
         Ok((start, end, dtlen))
     }
 
-    pub fn coords(&self) -> Option<(usize, usize, i32)> { // Changed return type
+    pub fn coords(&self) -> Option<(usize, usize, i32)> {
+        // Changed return type
         match self.filter.is_valid(&self.read, Some(self.header)) {
             Ok(true) => {
                 let (start, end, dtlen) = if self.use_fragment {
@@ -386,14 +383,13 @@ impl<'a> IntervalMaker<'a> {
                 start = start.saturating_add(truncate_5_prime);
             }
 
-        if let Some(truncate_3_prime) = truncate.three_prime {
-            end = end.saturating_sub(truncate_3_prime);
+            if let Some(truncate_3_prime) = truncate.three_prime {
+                end = end.saturating_sub(truncate_3_prime);
+            }
         }
 
-    }
-
         (start, end)
-}
+    }
 
     pub fn record(&self) -> Option<RecordBuf> {
         let (start, _end, dtlen) = self.coords()?;
@@ -401,17 +397,17 @@ impl<'a> IntervalMaker<'a> {
         let mut new_record = RecordBuf::try_from_alignment_record(self.header, &self.read).ok()?;
 
         *new_record.alignment_start_mut() = Position::new(start);
-        
+
         // Update template length based on the delta from coordinate modifications
         let original_template_length = self.read.template_length();
-        
+
         // Apply the delta to the template length, preserving sign
         let new_template_length = if original_template_length >= 0 {
             original_template_length.saturating_add(dtlen)
         } else {
             original_template_length.saturating_sub(dtlen)
         };
-        
+
         *new_record.template_length_mut() = new_template_length;
 
         Some(new_record)
