@@ -71,16 +71,13 @@ impl BamModifier {
 
         for region in query_regions {
             progress.inc(1);
-
-            // println!("Querying region: {:?}", region);
-
             let mut query = reader.query(&header, &index, &region)?;
             while let Some(record) = query.try_next().await? {
                 let is_valid = self.filter.is_valid(&record, Some(&header))?;
                 if !is_valid {
                     continue;
                 }
-
+                // Apply Tn5 shift if enabled
                 if self.tn5_shift {
                     if record.flags().is_properly_segmented() {
                         let shift_values = [4, -5, 5, -4];
@@ -93,6 +90,8 @@ impl BamModifier {
                             .context("Missing alignment start")??
                             .get() as i64
                             - 1; // Convert to 0-based
+
+                        start = std::cmp::max(start, 0); // Ensure start is non-negative
                         let mut end = start + record.sequence().len() as i64;
 
                         let ref_seq_id = record
@@ -138,28 +137,60 @@ impl BamModifier {
                                     &header, &record,
                                 )?;
 
-                            *aln.alignment_start_mut() = Some(Position::try_from(start as usize)?);
-
-                            if tlen < 0 {
-                                *aln.template_length_mut() = tlen - dtlen as i32;
+                            // Ensure start is within bounds before converting to Position
+                            if start >= 0 && start <= *chromsize as i64 {
+                                // Position::try_from expects 1-based coordinates, so convert back
+                                *aln.alignment_start_mut() =
+                                    Some(Position::try_from((start + 1) as usize)?);
                             } else {
-                                *aln.template_length_mut() = tlen + dtlen as i32;
+                                warn!(
+                                    "Adjusted start out of bounds: {start} (chromsize={chromsize})"
+                                );
+                                // Skip writing this record if start invalid
+                                continue;
                             }
 
+                            // Safely adjust template length (tlen is i32)
+                            let adjusted_tlen: i32 = if tlen < 0 {
+                                // tlen - dtlen
+                                tlen.saturating_sub(dtlen as i32)
+                            } else {
+                                // tlen + dtlen
+                                tlen.saturating_add(dtlen as i32)
+                            };
+                            *aln.template_length_mut() = adjusted_tlen;
+
+                            // Get mate start as signed 0-based coordinate
                             let mate_start = aln
                                 .mate_alignment_start()
                                 .context("Missing mate alignment start")?
-                                .get()
+                                .get() as i64
                                 - 1; // Convert to 0-based
 
+                            // Compute adjusted mate positions using signed arithmetic
+                            // and ensure they are within bounds before converting to usize
                             if !first_in_template && reverse {
-                                *aln.mate_alignment_start_mut() = Some(Position::try_from(
-                                    mate_start + shift_values[0] as usize,
-                                )?);
+                                let adj = mate_start + shift_values[0];
+                                if adj >= 0 && adj <= *chromsize as i64 {
+                                    // Convert 0-based adj back to 1-based for Position
+                                    *aln.mate_alignment_start_mut() =
+                                        Some(Position::try_from((adj + 1) as usize)?);
+                                } else {
+                                    warn!(
+                                        "Adjusted mate start out of bounds: {adj} (chromsize={chromsize})"
+                                    );
+                                }
                             } else if first_in_template && reverse {
-                                *aln.mate_alignment_start_mut() = Some(Position::try_from(
-                                    mate_start - shift_values[3] as usize,
-                                )?);
+                                let adj = mate_start - shift_values[3];
+                                if adj >= 0 && adj <= *chromsize as i64 {
+                                    // Convert 0-based adj back to 1-based for Position
+                                    *aln.mate_alignment_start_mut() =
+                                        Some(Position::try_from((adj + 1) as usize)?);
+                                } else {
+                                    warn!(
+                                        "Adjusted mate start out of bounds: {adj} (chromsize={chromsize})"
+                                    );
+                                }
                             }
 
                             writer.write_alignment_record(&header, &aln).await?;

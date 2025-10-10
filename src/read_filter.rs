@@ -316,15 +316,14 @@ impl BamReadFilter {
         let end = start + alignment_length;
 
         // Filter by blacklisted locations.
-        if let Some(blacklisted_locations) = &self.blacklisted_locations {
-            if let Some(blacklist) = blacklisted_locations.get(&chrom_id) {
-                if blacklist.count(start, end) > 0 {
-                    self.stats
-                        .n_failed_blacklist
-                        .fetch_add(1, Ordering::Relaxed);
-                    return Ok(false);
-                }
-            }
+        if let Some(blacklisted_locations) = &self.blacklisted_locations
+            && let Some(blacklist) = blacklisted_locations.get(&chrom_id)
+            && blacklist.count(start, end) > 0
+        {
+            self.stats
+                .n_failed_blacklist
+                .fetch_add(1, Ordering::Relaxed);
+            return Ok(false);
         }
 
         // Filter by whitelisted barcodes.
