@@ -62,7 +62,13 @@ jobs:
         run: |
           cargo fetch --target ${{ matrix.target }}
 
-      - run: rustup toolchain install stable --profile minimal --no-self-update
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+          components: rust-src, rust-std, cargo
+
 
       - run: rustup target add ${{ matrix.target }}
 
@@ -149,7 +155,12 @@ jobs:
         with:
           fetch-depth: 1
 
-      - run: rustup toolchain install stable --profile minimal --no-self-update
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+          components: rust-src, rust-std, cargo
 
       - uses: Swatinem/rust-cache@v2
         with:
