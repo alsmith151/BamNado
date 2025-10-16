@@ -42,7 +42,7 @@ jobs:
             binary-suffix: ""
             archive-suffix: "macos-x86_64"
           - target: aarch64-apple-darwin
-            os: macos-14
+            os: macos-latest
             binary-suffix: ""
             archive-suffix: "macos-aarch64"
           - target: x86_64-pc-windows-msvc
@@ -54,23 +54,41 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
         with:
           fetch-depth: 1
 
-      - name: Pre-warm dependency cache
+      # Ensure rustup/cargo exists (helps when running with act)
+      - name: Ensure rustup (for act/local)
+        if: runner.os == 'Linux'
         run: |
-          cargo fetch --target ${{ matrix.target }}
+          if ! command -v rustup >/dev/null 2>&1; then
+            curl https://sh.rustup.rs -sSf | sh -s -- -y
+            source $HOME/.cargo/env
+          fi
+        shell: bash
 
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - name: Setup Rust toolchain
+        uses: actions-rs/toolchain@v1
         with:
           profile: minimal
           toolchain: stable
           override: true
           components: rust-src, rust-std, cargo
 
+      - name: Make cargo available in shell
+        run: |
+          source $HOME/.cargo/env || true
+        shell: bash
 
-      - run: rustup target add ${{ matrix.target }}
+      - name: Pre-warm dependency cache
+        run: |
+          source $HOME/.cargo/env || true
+          # Only attempt cargo fetch for targets that will run with cargo (mac/windows) or cross (linux)
+          # For linux targets we still run cargo fetch locally to populate registry cache for the runner
+          cargo fetch --target ${{ matrix.target }}
+        shell: bash
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -79,66 +97,35 @@ jobs:
           cache-all-crates: "true"
           shared-key: "release"
 
-      - name: Install cross-compilation tools (Linux aarch64)
-        if: matrix.target == 'aarch64-unknown-linux-gnu'
+      - name: Install cross (for linux cross-compiles)
+        if: startsWith(matrix.target, 'x86_64') || startsWith(matrix.target, 'aarch64')
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y gcc-aarch64-linux-gnu
+          source $HOME/.cargo/env || true
+          cargo install cross --locked || true
+        shell: bash
 
-      - name: Install musl tools
-        if: contains(matrix.target, 'musl')
+      # Build: use `cross` for Linux targets (including musl & aarch64), use cargo for macOS/Windows
+      - name: Build release binary (cross for Linux / cargo for macOS & Windows)
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y musl-tools
-          if [[ "${{ matrix.target }}" == "aarch64-unknown-linux-musl" ]]; then
-            sudo apt-get install -y gcc-aarch64-linux-gnu
-          fi
+          source $HOME/.cargo/env || true
 
-      - name: Configure cross-compilation (Linux aarch64)
-        if: matrix.target == 'aarch64-unknown-linux-gnu'
-        run: |
-          mkdir -p ~/.cargo
-          echo "[target.aarch64-unknown-linux-gnu]" >> ~/.cargo/config.toml
-          echo "linker = \"aarch64-linux-gnu-gcc\"" >> ~/.cargo/config.toml
-          echo "rustflags = [\"-C\", \"target-feature=+crt-static\", \"-C\", \"link-arg=-static\"]" >> ~/.cargo/config.toml
+          # normalize target variable for shell usage
+          T="${{ matrix.target }}"
 
-      - name: Configure cross-compilation (musl targets)
-        if: contains(matrix.target, 'musl')
-        run: |
-          mkdir -p ~/.cargo
-          if [[ "${{ matrix.target }}" == "aarch64-unknown-linux-musl" ]]; then
-            echo "[target.aarch64-unknown-linux-musl]" >> ~/.cargo/config.toml
-            echo "linker = \"aarch64-linux-gnu-gcc\"" >> ~/.cargo/config.toml
-            echo "rustflags = [\"-C\", \"target-feature=+crt-static\", \"-C\", \"link-arg=-static\"]" >> ~/.cargo/config.toml
+          if [[ "${{ matrix.os }}" == "ubuntu-latest" ]] || [[ "${{ matrix.os }}" == "ubuntu-20.04" ]] || [[ "${{ matrix.os }}" == "ubuntu-22.04" ]] || [[ "${{ matrix.os }}" == "ubuntu-24.04" ]]; then
+            # Use cross for Linux targets (works for both musl and gnu, and for aarch64)
+            echo "Using cross to build ${T}"
+            cross build --release --target "${T}"
+          elif [[ "${{ matrix.os }}" == "macos-latest" ]] || [[ "${{ matrix.os }}" == "macos-14" ]]; then
+            # macOS runner: native cargo build
+            echo "Using cargo (native) to build ${T} on macOS runner"
+            cargo build --release --target "${T}"
           else
-            echo "[target.x86_64-unknown-linux-musl]" >> ~/.cargo/config.toml
-            echo "rustflags = [\"-C\", \"target-feature=+crt-static\", \"-C\", \"link-arg=-static\"]" >> ~/.cargo/config.toml
+            # windows or other runners: native cargo build (windows runner has MSVC)
+            echo "Using cargo (native) to build ${T} on $RUNNER_OS"
+            cargo build --release --target "${T}"
           fi
-
-      - name: Configure static linking for other Linux targets
-        if: contains(matrix.target, 'linux') && !contains(matrix.target, 'musl') && matrix.target != 'aarch64-unknown-linux-gnu'
-        run: |
-          mkdir -p ~/.cargo
-          echo "[target.${{ matrix.target }}]" >> ~/.cargo/config.toml
-          echo "rustflags = [\"-C\", \"target-feature=+crt-static\", \"-C\", \"link-arg=-static\"]" >> ~/.cargo/config.toml
-
-      - name: Configure static linking for macOS targets
-        if: contains(matrix.target, 'apple')
-        run: |
-          mkdir -p ~/.cargo
-          echo "[target.${{ matrix.target }}]" >> ~/.cargo/config.toml
-          echo "rustflags = [\"-C\", \"link-arg=-static-libgcc\"]" >> ~/.cargo/config.toml
-
-      - name: Configure static linking for Windows targets
-        if: contains(matrix.target, 'windows')
-        run: |
-          New-Item -ItemType Directory -Path ~/.cargo -Force
-          Add-Content -Path ~/.cargo/config.toml -Value "[target.${{ matrix.target }}]"
-          Add-Content -Path ~/.cargo/config.toml -Value 'rustflags = ["-C", "target-feature=+crt-static"]'
-
-      - name: Build release binary
-        run: |
-          cargo build --release --target ${{ matrix.target }}
+        shell: bash
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -155,7 +142,8 @@ jobs:
         with:
           fetch-depth: 1
 
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - name: Setup Rust toolchain (release job)
+        uses: actions-rs/toolchain@v1
         with:
           profile: minimal
           toolchain: stable
@@ -178,13 +166,12 @@ jobs:
 
       - name: Update Cargo.toml version
         run: |
-          sed -i.bak 's/^version = ".*"/version = "${{ steps.get_version.outputs.VERSION }}"/' Cargo.toml
+          sed -i.bak "s/^version = \".*\"/version = \"${{ steps.get_version.outputs.VERSION }}\"/" Cargo.toml
           echo "Updated version to ${{ steps.get_version.outputs.VERSION }}"
           echo "Before:"
           grep "^version" Cargo.toml.bak || true
           echo "After:"
           grep "^version" Cargo.toml
-          # Clean up backup file
           rm -f Cargo.toml.bak
 
       - name: Commit version updates
@@ -200,12 +187,18 @@ jobs:
           fi
 
       - name: Login into crates.io
-        run: cargo login ${{ secrets.CRATES_IO }}
+        run: |
+          source $HOME/.cargo/env || true
+          cargo login ${{ secrets.CRATES_IO }}
 
-      - run: |
+      - name: Build/package/publish
+        run: |
+          source $HOME/.cargo/env || true
           cargo build --release
           cargo package --allow-dirty
           cargo publish
+        env:
+          CARGO_TERM_COLOR: always
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4
