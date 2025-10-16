@@ -1,6 +1,6 @@
 # BamNado
 
-**Version 0.3.1** - High-performance tools and utilities for manipulation of BAM files for specialized use cases, including single cell and MCC (Multi-modal cellular characterization) workflows.
+High-performance tools and utilities for manipulation of BAM files for specialized use cases, including single cell and MCC (Multi-modal cellular characterization) workflows.
 
 ## Overview
 

@@ -37,10 +37,6 @@ jobs:
             os: ubuntu-latest
             binary-suffix: ""
             archive-suffix: "linux-aarch64-musl"
-          - target: x86_64-apple-darwin
-            os: macos-latest
-            binary-suffix: ""
-            archive-suffix: "macos-x86_64"
           - target: aarch64-apple-darwin
             os: macos-latest
             binary-suffix: ""
