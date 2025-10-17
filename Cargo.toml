@@ -15,14 +15,14 @@ keywords = ["bioinformatics", "scATAC-seq", 'MCC']
 ahash = "0.8.12"
 anyhow = "1.0.98"
 bigtools = "0.5.6"
-bio = "2.3.0"
+bio = "3.0.0"
 bio-types = "1.0.1"
 clap = { version = "4.5.40", features = ["derive"] }
 colog = "1.3.0"
-indicatif = { version = "0.17.11", features = ["rayon"] }
+indicatif = { version = "0.18.0", features = ["rayon"] }
 itertools = "0.14.0"
 log = "0.4.27"
-noodles = { version = '0.99.0', features = [
+noodles = { version = '0.101.0', features = [
   'bgzf',
   'cram',
   'bed',
@@ -32,7 +32,7 @@ noodles = { version = '0.99.0', features = [
   'sam',
   'bam',
 ] }
-polars = { version = "0.49.1", features = ['lazy', "polars-ops", "cum_agg"] }
+polars = { version = "0.51.0", features = ['lazy', "polars-ops", "cum_agg", "decompress"] }
 rayon = "1.10.0"
 rust-lapper = "1.1.0"
 tempfile = "3.20.0"
@@ -61,3 +61,8 @@ pre-release-replacements = [
   { file = "CHANGELOG.md", search = "## \\[Unreleased\\]", replace = "## [Unreleased]\n\n## [{{version}}] - {{date}}", exactly = 1 },
   { file = "CHANGELOG.md", search = "\\[Unreleased\\]: https://github.com/alsmith151/BamNado/compare/v[^\\]]+\\.\\.\\.HEAD", replace = "[Unreleased]: https://github.com/alsmith151/BamNado/compare/v{{version}}...HEAD\n[{{version}}]: https://github.com/alsmith151/BamNado/compare/v{{prev_version}}...v{{version}}" },
 ]
+
+[dev-dependencies]
+assert_cmd = "2.0.16"
+predicates = "3.1.2"
+assert_fs = "1.1.2"
