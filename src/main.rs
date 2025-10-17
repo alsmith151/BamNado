@@ -242,6 +242,10 @@ enum Commands {
         /// Number of reads to process before collapsing and writing output to file toreduce memory usage
         #[arg(long, default_value = "1000000")]
         chunk_size: usize,
+
+        /// Collapse fragments within the same barcode only
+        #[arg(long, action = clap::ArgAction::SetTrue)]
+        collapse_within_barcode: bool,
     },
 }
 
@@ -633,6 +637,7 @@ fn main() -> Result<()> {
             min_fragment_length,
             max_fragment_length,
             chunk_size,
+            collapse_within_barcode,
         } => {
 
             // Validate input BAM file
@@ -647,6 +652,7 @@ fn main() -> Result<()> {
             let mut config = bamnado::fragments::FragmentConfig::default();
             config.min_distance = *min_fragment_length as i32;
             config.max_distance = *max_fragment_length as i32;
+            config.collapse_within_barcode = *collapse_within_barcode;
 
             info!("Fragment extraction configuration: {:?}", config);
             // Create fragment processor
@@ -753,14 +759,6 @@ fn main() -> Result<()> {
                         &outpath,
                         true,
                     )?;
-
-                    // Log stats after processing all chunks
-                    let stats = tracker.stats();
-                    info!(
-                        "Chromosome: {}, Total fragments: {}, Incomplete fragments: {}",
-                        chromosome, stats.1, stats.2
-                    );
-
                     Ok(())
                 },
             )?;
