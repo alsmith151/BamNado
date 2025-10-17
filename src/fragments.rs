@@ -177,8 +177,12 @@ impl FragmentTracker {
 
         // Extract mapping quality
         let mapq = match record.mapping_quality() {
+            // This is normally true
             Some(Ok(mq)) => u8::from(mq),
-            _ => 0,
+            // The STAR aligner sometimes leaves this unset will just assume it is 255
+            None => 255,
+            // If there is an error, skip the read
+            _ => return Ok(()),
         };
         
         if mapq < self.config.min_mapq {
