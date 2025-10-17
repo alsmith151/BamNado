@@ -1,7 +1,11 @@
 use anyhow::{Context, Result};
 use bamnado::bam_utils::FileType;
 use clap::{Parser, Subcommand};
+use itertools::Itertools;
 use log::info;
+use noodles::bam;
+use noodles::core::{Position, Region};
+use rayon::prelude::*;
 use std::str::FromStr;
 use std::{
     io::Write,
@@ -216,6 +220,28 @@ enum Commands {
 
         #[arg(long, action = clap::ArgAction::SetTrue)]
         tn5_shift: bool,
+    },
+
+    Fragments {
+        /// Input BAM file
+        #[arg(short, long)]
+        input: PathBuf,
+
+        /// Output prefix
+        #[arg(short, long)]
+        output: PathBuf,
+
+        /// Minimum fragment length
+        #[arg(long, default_value = "50")]
+        min_fragment_length: u32,
+
+        /// Maximum fragment length
+        #[arg(long, default_value = "1000")]
+        max_fragment_length: u32,
+
+        /// Number of reads to process before collapsing and writing output to file toreduce memory usage
+        #[arg(long, default_value = "1000000")]
+        chunk_size: usize,
     },
 }
 
@@ -600,7 +626,174 @@ fn main() -> Result<()> {
 
             info!("Successfully modified BAM file");
         }
+
+        Commands::Fragments {
+            input,
+            output,
+            min_fragment_length,
+            max_fragment_length,
+            chunk_size,
+        } => {
+
+            // Validate input BAM file
+            validate_bam_file(input)?;
+
+            let header = bamnado::bam_utils::get_bam_header(input)?;
+            let bam_stats = bamnado::BamStats::new(input.to_path_buf())
+                .context("Failed to create BAM stats")?;
+            let chromsizes = bam_stats.chromsizes_ref_name()?;
+
+            // Create fragment structs
+            let mut config = bamnado::fragments::FragmentConfig::default();
+            config.min_distance = *min_fragment_length as i32;
+            config.max_distance = *max_fragment_length as i32;
+
+            info!("Fragment extraction configuration: {:?}", config);
+            // Create fragment processor
+
+            // Process BAM in chunks per chromosome
+            chromsizes.clone().into_par_iter().try_for_each(
+                |(chromosome, size)| -> anyhow::Result<()> {
+
+                    //Create output directory if it does not exist
+                    if let Some(parent) = output.parent() {
+                        std::fs::create_dir_all(parent).context("Failed to create output directory")?;
+                    }
+
+                    // Create outfile path
+                    let outpath =
+                                format!("{}_{}.fragments.tsv.gz", output.display(), chromosome);
+                    let outpath = PathBuf::from(outpath);
+
+
+                    // Create a fragment tracker
+                    let mut tracker = bamnado::fragments::FragmentTracker::new(config.clone());
+                    let collapser = bamnado::fragments::FragmentCollapser::new(config.clone());
+
+                    // Create a new reader for each thread
+                    let mut reader = bam::io::indexed_reader::Builder::default()
+                        .build_from_path(input)
+                        .context(format!("Failed to open BAM file {}", input.display()))?;
+
+                    let start = Position::try_from(1)?;
+                    let end = Position::try_from(size as usize)?;
+
+                    let records = reader
+                        .query(&header, &Region::new(chromosome.clone(), start..=end))
+                        .context("Failed to query BAM records")?;
+
+
+                    records.chunks(*chunk_size).into_iter().try_for_each(
+                        |chunk| -> anyhow::Result<()> {
+                            // collect records in this chunk
+                            let records: Result<Vec<_>, _> = chunk.collect();
+                            let records = records.context("Failed to read BAM records")?;
+
+                            // ensure there is at least one record in the chunk
+                            let last = records
+                                .last()
+                                .ok_or_else(|| anyhow::anyhow!("No records in chunk"))?;
+
+                            for (_, record) in records.iter().enumerate() {
+                                tracker.process_record(record, &chromosome)?;
+                            }
+
+                            // compute current position based on the last record
+                            let current_position: i32 = match last.alignment_start() {
+                                Some(Ok(pos)) => {
+                                    if last.flags().is_reverse_complemented() {
+                                        // for reverse strand reads we use the alignment start
+                                        usize::from(pos) as i32
+                                    } else {
+                                        // for forward strand reads use alignment start + read length
+                                        // be careful with usize -> i32 conversion
+                                        let read_len = last.sequence().len() as i32;
+                                        usize::from(pos) as i32 + read_len
+                                    }
+                                }
+                                Some(Err(e)) => {
+                                    return Err(anyhow::anyhow!(
+                                        "Failed to get alignment position: {}",
+                                        e
+                                    ));
+                                }
+                                None => {
+                                    return Err(anyhow::anyhow!(
+                                        "Alignment position is missing for a record"
+                                    ));
+                                }
+                            };
+
+
+                            // harvest complete fragments up to the current position
+                            let fragments_complete =
+                                tracker.harvest_complete_fragments(current_position);
+
+                            
+                            let fragments_collapsed = collapser.collapse(fragments_complete);
+                            
+                            bamnado::fragments::write_fragments(
+                                &fragments_collapsed,
+                                &outpath,
+                                true,
+                            )?;
+
+
+                            Ok(())
+                        },
+                    )?;
+
+
+                    // After processing all chunks, harvest any remaining fragments
+                    let remaining_fragments = tracker.harvest_all();
+
+                    let remaining_collapsed = collapser.collapse(remaining_fragments);
+                    bamnado::fragments::write_fragments(
+                        &remaining_collapsed,
+                        &outpath,
+                        true,
+                    )?;
+
+                    // Log stats after processing all chunks
+                    let stats = tracker.stats();
+                    info!(
+                        "Chromosome: {}, Total fragments: {}, Incomplete fragments: {}",
+                        chromosome, stats.1, stats.2
+                    );
+
+                    Ok(())
+                },
+            )?;
+
+            // Merge per-chromosome fragment files into a single output file
+            let mut final_outfile = std::fs::File::create(output)
+                .context("Failed to create final fragments output file")?;
+
+            // Just read the contents of each per-chromosome file and write to final output
+            chromsizes.into_iter().try_for_each(|(chromosome, _size)| -> anyhow::Result<()> {
+                let per_chrom_path =
+                    format!("{}_{}.fragments.tsv.gz", output.display(), chromosome);
+                let per_chrom_path = PathBuf::from(per_chrom_path);
+
+                let mut per_chrom_file = std::fs::File::open(&per_chrom_path)
+                    .context("Failed to open per-chromosome fragments file")?;
+
+                std::io::copy(&mut per_chrom_file, &mut final_outfile)
+                    .context("Failed to write to final fragments output file")?;
+
+                // Remove the per-chromosome file
+                std::fs::remove_file(&per_chrom_path)
+                    .context("Failed to remove temporary per-chromosome fragments file")?;
+
+                Ok(())
+            }).expect("Encountered an error when making fragments");
+            
+
+
+
+        }
     }
 
     Ok(())
 }
+

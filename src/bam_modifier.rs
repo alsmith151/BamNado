@@ -1,5 +1,4 @@
 use crate::bam_utils::get_bam_header;
-
 use crate::read_filter::BamReadFilter;
 use anyhow::Context;
 use anyhow::Result;
