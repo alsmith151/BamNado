@@ -1,6 +1,5 @@
 use ahash::{HashMap, HashMapExt, HashSet};
 use anyhow::{Context, Result};
-use log::info;
 use noodles::sam::alignment::record::data::field::tag::Tag;
 use noodles::sam::alignment::record::data::field::Value;
 use noodles::sam::alignment::record::Record;
@@ -104,7 +103,6 @@ struct IncompleteFragment {
     start: Option<i32>,
     end: Option<i32>,
     barcode: Option<String>,
-    mate_id: Option<String>,
 }
 
 impl IncompleteFragment {
@@ -114,7 +112,6 @@ impl IncompleteFragment {
             start: None,
             end: None,
             barcode: None,
-            mate_id: None,
         }
     }
 
