@@ -5,7 +5,7 @@ build-backend = "maturin"
 [tool.maturin]
 # "extension-module" tells pyo3 we want to build an extension module (skips linking against libpython.so)
 features = ["pyo3/extension-module"]
-python-source = "python"
+python-source = "bamnado-python/python"
 module-name = "bamnado._bamnado"
 # Build artifacts with the specified Cargo profile
 profile = "release"
@@ -19,7 +19,7 @@ all-features = false
 # Do not activate the `default` feature
 no-default-features = false
 # Cargo manifest path
-manifest-path = "Cargo.toml"
+manifest-path = "bamnado-python/Cargo.toml"
 # Require Cargo.lock and cache are up to date
 frozen = false
 # Require Cargo.lock is up to date

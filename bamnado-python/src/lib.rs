@@ -1,21 +1,9 @@
-// Rust crates
 use anyhow;
 use ndarray::prelude::*;
 use numpy::{PyArray1, prelude::*};
 use pyo3::exceptions::{PyKeyError, PyRuntimeError};
 use pyo3::prelude::*;
-
-// Internal modules
-pub mod bam_modifier;
-pub mod bam_splitter;
-pub mod bam_utils;
-pub mod coverage_analysis;
-pub mod genomic_intervals;
-pub mod read_filter;
-pub mod signal_normalization;
-pub mod spike_in_analysis;
-use crate::read_filter::BamReadFilter;
-pub use bam_utils::{BamStats, CellBarcodes, CellBarcodesMulti, Strand};
+use bamnado::{bam_utils, coverage_analysis, signal_normalization, read_filter::BamReadFilter};
 
 fn anyhow_to_pyerr(err: anyhow::Error) -> PyErr {
     PyRuntimeError::new_err(err.to_string())
