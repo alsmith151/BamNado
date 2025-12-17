@@ -13,6 +13,25 @@ fn anyhow_to_pyerr(err: anyhow::Error) -> PyErr {
 mod _bamnado {
     use super::*;
 
+    /// Get the signal for a specific chromosome from a BAM file.
+    ///
+    /// This function calculates the coverage signal for a given chromosome, optionally scaling it
+    /// and using fragment length information.
+    ///
+    /// Args:
+    ///     bam_path (str): Path to the BAM file.
+    ///     chromosome_name (str): Name of the chromosome to analyze.
+    ///     bin_size (int): Size of the bins for coverage calculation.
+    ///     scale_factor (float): Factor to scale the signal by.
+    ///     use_fragment (bool): Whether to use fragment length for coverage (True) or just read start (False).
+    ///     ignore_scaffold_chromosomes (bool): Whether to ignore scaffold chromosomes during analysis.
+    ///
+    /// Returns:
+    ///     numpy.ndarray: A 1D numpy array of floats representing the signal across the chromosome.
+    ///
+    /// Raises:
+    ///     RuntimeError: If there is an error reading the BAM file or processing the data.
+    ///     KeyError: If the specified chromosome is not found in the BAM file.
     #[pyfunction]
     #[pyo3(
         text_signature = "(bam_path, chromosome_name, bin_size, scale_factor, use_fragment, ignore_scaffold_chromosomes)"
