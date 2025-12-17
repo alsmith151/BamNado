@@ -1,3 +1,12 @@
+//! # BamNado Python Interface
+//!
+//! This crate provides the Python bindings for the `bamnado` library using `pyo3`.
+//! It exposes high-performance Rust implementations of BAM processing tools to Python.
+//!
+//! ## Exposed Functions
+//!
+//! *   `get_signal_for_chromosome`: Calculates coverage signal for a chromosome.
+
 use anyhow;
 use ndarray::prelude::*;
 use numpy::{PyArray1, prelude::*};

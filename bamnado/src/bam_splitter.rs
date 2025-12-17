@@ -1,3 +1,14 @@
+//! # BAM Splitter Module
+//!
+//! This module handles the splitting of BAM files into smaller subsets or filtering them
+//! based on user-defined criteria. It supports asynchronous processing and parallel execution
+//! to efficiently handle large genomic datasets.
+//!
+//! Key features include:
+//! *   Splitting BAM files by barcodes or other tags.
+//! *   Filtering reads during the splitting process.
+//! *   Asynchronous I/O for high performance.
+
 use crate::bam_utils::BamStats;
 use crate::bam_utils::get_bam_header;
 use crate::read_filter::BamReadFilter;
@@ -17,6 +28,7 @@ use std::path::PathBuf;
 use futures::TryStreamExt;
 use tokio::fs::File;
 
+/// Filters BAM files based on read criteria.
 pub struct BamFilterer {
     filepath: PathBuf,
     output: PathBuf,
@@ -24,6 +36,13 @@ pub struct BamFilterer {
 }
 
 impl BamFilterer {
+    /// Creates a new `BamFilterer`.
+    ///
+    /// # Arguments
+    ///
+    /// * `filepath` - Path to the input BAM file.
+    /// * `output` - Path to the output BAM file.
+    /// * `filter` - Filter criteria for reads.
     pub fn new(filepath: PathBuf, output: PathBuf, filter: BamReadFilter) -> Self {
         BamFilterer {
             filepath,
@@ -32,6 +51,9 @@ impl BamFilterer {
         }
     }
 
+    /// Runs the filtering process asynchronously.
+    ///
+    /// This reads the input BAM, filters reads, and writes the result to the output file.
     pub async fn split_async(&self) -> Result<()> {
         let filepath = self.filepath.clone();
         let outfile = self.output.clone();

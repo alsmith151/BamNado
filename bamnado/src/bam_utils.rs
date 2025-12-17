@@ -1,3 +1,12 @@
+//! # BAM Utilities Module
+//!
+//! This module contains a collection of utility functions and data structures for working with
+//! BAM files. It includes tools for:
+//! *   Parsing and handling BAM headers and indexes.
+//! *   Managing cell barcodes and strand information.
+//! *   Calculating basic statistics from BAM files.
+//! *   Helper types for genomic intervals and coordinate systems.
+
 use ahash::{HashMap, HashSet};
 use anyhow::{Context, Result};
 use bio_types::annot::contig::Contig;
@@ -14,13 +23,19 @@ use std::ops::Bound;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
+/// The cell barcode tag (CB).
 pub const CB: [u8; 2] = [b'C', b'B'];
+/// Type alias for an interval with a `u32` value.
 pub type Iv = Interval<usize, u32>;
 
+/// Represents the strand of a genomic feature.
 #[derive(Debug, Clone, PartialEq, Eq, Copy)]
 pub enum Strand {
+    /// Forward strand (+).
     Forward,
+    /// Reverse strand (-).
     Reverse,
+    /// Both strands (unstranded).
     Both,
 }
 impl FromStr for Strand {
@@ -55,6 +70,12 @@ impl From<Strand> for BioStrand {
     }
 }
 
+/// Creates a progress bar with a standard style.
+///
+/// # Arguments
+///
+/// * `length` - The total number of items to process.
+/// * `message` - The message to display next to the progress bar.
 pub fn progress_bar(length: u64, message: String) -> indicatif::ProgressBar {
     // Progress bar
     let progress_style = indicatif::ProgressStyle::with_template(
@@ -63,12 +84,12 @@ pub fn progress_bar(length: u64, message: String) -> indicatif::ProgressBar {
     .unwrap()
     .progress_chars("##-");
 
-    let progress_bar = indicatif::ProgressBar::new(length);
-    progress_bar.set_style(progress_style.clone());
-    progress_bar.set_message(message);
-    progress_bar
+    indicatif::ProgressBar::new(length)
+        .with_style(progress_style)
+        .with_message(message)
 }
 
+/// A collection of unique cell barcodes.
 pub struct CellBarcodes {
     barcodes: HashSet<String>,
 }
@@ -80,20 +101,26 @@ impl Default for CellBarcodes {
 }
 
 impl CellBarcodes {
+    /// Creates a new empty `CellBarcodes` collection.
     pub fn new() -> Self {
         Self {
             barcodes: HashSet::default(),
         }
     }
 
+    /// Returns a copy of the set of barcodes.
     pub fn barcodes(&self) -> HashSet<String> {
         self.barcodes.clone()
     }
 
+    /// Returns `true` if the collection is empty.
     pub fn is_empty(&self) -> bool {
         self.barcodes.is_empty()
     }
 
+    /// Loads cell barcodes from a CSV file.
+    ///
+    /// The CSV file must have a header with a column named "barcode".
     pub fn from_csv(file_path: &PathBuf) -> Result<Self> {
         let path = Path::new(file_path).to_path_buf();
 
@@ -111,13 +138,14 @@ impl CellBarcodes {
         println!("Number of barcodes: {}", barcodes.len());
         println!(
             "First 10 barcodes: {:?}",
-            barcodes.iter().take(10).collect::<Vec<&String>>()
+            barcodes.iter().take(10).collect::<Vec<_>>()
         );
 
         Ok(Self { barcodes })
     }
 }
 
+/// A collection of sets of cell barcodes, where each set represents a group.
 pub struct CellBarcodesMulti {
     barcodes: Vec<HashSet<String>>,
 }
@@ -129,20 +157,26 @@ impl Default for CellBarcodesMulti {
 }
 
 impl CellBarcodesMulti {
+    /// Creates a new empty `CellBarcodesMulti` collection.
     pub fn new() -> Self {
         Self {
             barcodes: Vec::new(),
         }
     }
 
+    /// Returns a copy of the vector of barcode sets.
     pub fn barcodes(&self) -> Vec<HashSet<String>> {
         self.barcodes.clone()
     }
 
+    /// Returns `true` if the collection is empty.
     pub fn is_empty(&self) -> bool {
         self.barcodes.is_empty()
     }
 
+    /// Loads multiple sets of barcodes from a CSV file.
+    ///
+    /// Each column in the CSV file is treated as a separate set of barcodes.
     pub fn from_csv(file_path: &PathBuf) -> Result<Self> {
         let path = Path::new(file_path).to_path_buf();
 
@@ -177,6 +211,10 @@ struct ChromosomeStats {
     unmapped: u64,
 }
 
+/// Reads the header of a BAM file.
+///
+/// If the `noodles` crate fails to read the header, it falls back to `samtools`.
+/// This is useful for handling BAM files with slightly non-standard headers (e.g., from CellRanger).
 pub fn bam_header(file_path: PathBuf) -> Result<sam::Header> {
     // Read the header of a BAM file
     // If the noodles crate fails to read the header, we fall back to samtools
@@ -224,6 +262,7 @@ pub fn bam_header(file_path: PathBuf) -> Result<sam::Header> {
     Ok(header)
 }
 
+/// Stores statistics and metadata about a BAM file.
 pub struct BamStats {
     // BAM file stats
 
@@ -250,6 +289,9 @@ pub struct BamStats {
 }
 
 impl BamStats {
+    /// Creates a new `BamStats` instance from a BAM file path.
+    ///
+    /// This reads the header and index to calculate statistics.
     pub fn new(file_path: PathBuf) -> Result<Self> {
         // Read the header of the BAM file
         let header = bam_header(file_path.clone())?;
@@ -319,12 +361,16 @@ impl BamStats {
         })
     }
 
+    /// Estimates the optimal genome chunk length for parallel processing.
+    ///
+    /// The chunk length is calculated based on the genome size, number of mapped reads,
+    /// and the desired bin size.
     pub fn estimate_genome_chunk_length(&self, bin_size: u64) -> Result<u64> {
         // genomeLength = sum(bamHandles[0].lengths)
         // max_reads_per_bp = max([float(x) / genomeLength for x in mappedList])
         // genomeChunkLength = int(min(5e6, int(2e6 / (max_reads_per_bp * len(bamHandles)))))
         // genomeChunkLength -= genomeChunkLength % tile_size
-
+    
         let stats = &self.chrom_stats;
         let genome_length = stats.values().map(|x| x.length).sum::<u64>();
         let max_reads_per_bp = self.n_mapped as f64 / genome_length as f64;
@@ -336,6 +382,7 @@ impl BamStats {
         Ok(genome_chunk_length as u64)
     }
 
+    /// Splits the genome into chunks for parallel processing.
     pub fn genome_chunks(&self, bin_size: u64) -> Result<Vec<Region>> {
         let genome_chunk_length = self.estimate_genome_chunk_length(bin_size)?;
         let chrom_chunks = self
@@ -365,6 +412,7 @@ impl BamStats {
         Ok(chrom_chunks)
     }
 
+    /// Splits a specific chromosome into chunks.
     pub fn chromosome_chunks(&self, chrom: &str, bin_size: u64) -> Result<Vec<Region>> {
         let genome_chunk_length = self.estimate_genome_chunk_length(bin_size)?;
         let stats = self
@@ -392,6 +440,7 @@ impl BamStats {
         Ok(chunks)
     }
 
+    /// Returns a mapping from chromosome ID to chromosome name.
     pub fn chromosome_id_to_chromosome_name_mapping(&self) -> HashMap<usize, String> {
         let mut ref_id_mapping = HashMap::default();
         for (i, (name, _)) in self.header.reference_sequences().iter().enumerate() {
@@ -404,6 +453,7 @@ impl BamStats {
         ref_id_mapping
     }
 
+    /// Returns a mapping from chromosome name to chromosome ID.
     pub fn chromosome_name_to_id_mapping(&self) -> Result<HashMap<String, usize>> {
         let mut mapping = HashMap::default();
         let id_to_name = self.chromosome_id_to_chromosome_name_mapping();
@@ -416,6 +466,7 @@ impl BamStats {
         Ok(mapping)
     }
 
+    /// Returns a mapping from chromosome ID to chromosome length.
     pub fn chromsizes_ref_id(&self) -> Result<HashMap<usize, u64>> {
         let mut chromsizes = HashMap::default();
         for (i, (_, map)) in self.header.reference_sequences().iter().enumerate() {
@@ -425,6 +476,7 @@ impl BamStats {
         Ok(chromsizes)
     }
 
+    /// Returns a mapping from chromosome name to chromosome length.
     pub fn chromsizes_ref_name(&self) -> Result<HashMap<String, u64>> {
         let mut chromsizes = HashMap::default();
         for (name, map) in self.header.reference_sequences() {
@@ -438,18 +490,8 @@ impl BamStats {
         Ok(chromsizes)
     }
 
+    /// Writes chromosome sizes to a TSV file.
     pub fn write_chromsizes(&self, outfile: PathBuf) -> Result<()> {
-        // // Write the chromosome sizes to a file
-        // let chrom_sizes = self.chromsizes_ref_name()?;
-        // // Write to the output file
-        // info!("Writing chromosome sizes to {}", outfile.display());
-        // let mut writer = std::io::BufWriter::new(std::fs::File::create(outfile)?);
-
-        // for (chrom, length) in chrom_sizes.iter() {
-        //     writeln!(writer, "{}\t{}", chrom, length)?;
-        // }
-        // Ok(())
-
         let chrom_sizes = self.chromsizes_ref_name()?;
         // Convert the chromosome sizes to a DataFrame
         let mut df = DataFrame::new(vec![
@@ -466,8 +508,6 @@ impl BamStats {
         // Sort the DataFrame by chromosome name
         df.sort_in_place(["chrom"], SortMultipleOptions::default())?;
 
-        // Write the DataFrame to a CSV file
-        info!("Writing chromosome sizes to {}", outfile.display());
         let mut file = std::fs::File::create(outfile)?;
         CsvWriter::new(&mut file)
             .include_header(false)
@@ -476,20 +516,29 @@ impl BamStats {
         Ok(())
     }
 
+    /// Returns the number of mapped reads.
     pub fn n_mapped(&self) -> u64 {
         self.n_mapped
     }
+
+    /// Returns the number of unmapped reads.
     pub fn n_unmapped(&self) -> u64 {
         self.n_unmapped
     }
+
+    /// Returns the total number of reads.
     pub fn n_total_reads(&self) -> u64 {
         self.n_reads
     }
 }
 
+/// Supported output file types.
 pub enum FileType {
+    /// BedGraph format.
     Bedgraph,
+    /// BigWig format.
     Bigwig,
+    /// Tab-Separated Values.
     TSV,
 }
 
@@ -509,6 +558,7 @@ impl std::str::FromStr for FileType {
     }
 }
 
+/// Converts a list of regions to a `Lapper` interval tree for efficient overlap queries.
 pub fn regions_to_lapper(regions: Vec<Region>) -> Result<HashMap<String, Lapper<usize, u32>>> {
     let mut lapper: HashMap<String, Lapper<usize, u32>> = HashMap::default();
     let mut intervals: HashMap<String, Vec<Iv>> = HashMap::default();
@@ -546,6 +596,7 @@ pub fn regions_to_lapper(regions: Vec<Region>) -> Result<HashMap<String, Lapper<
     Ok(lapper)
 }
 
+/// Reads a BED file and converts it to a `Lapper` interval tree.
 pub fn bed_to_lapper(bed: PathBuf) -> Result<HashMap<String, Lapper<usize, u32>>> {
     // Read the bed file and convert it to a lapper
     let reader = std::fs::File::open(bed)?;
@@ -563,8 +614,8 @@ pub fn bed_to_lapper(bed: PathBuf) -> Result<HashMap<String, Lapper<usize, u32>>
             .context("Failed to get feature end")??;
 
         let iv = Iv {
-            start: start.into(),
-            stop: end.into(),
+            start: start.get(),
+            stop: end.get(),
             val: 0,
         };
         intervals.entry(chrom.clone()).or_default().push(iv);
@@ -582,10 +633,10 @@ pub fn bed_to_lapper(bed: PathBuf) -> Result<HashMap<String, Lapper<usize, u32>>
     Ok(lapper)
 }
 
-/// Convert the chromosome names in the lapper to the chromosome IDs in the BAM file
-/// This is useful for when we want to use the lapper with the BAM file
-/// We need to convert the chromosome names in the lapper to the chromosome IDs in the BAM file
-pub fn lapper_chrom_name_to_lapper_chrom_id(
+/// Converts the chromosome names in a `Lapper` to chromosome IDs based on a BAM file's header.
+///
+/// This is useful for when we want to use the lapper with the BAM file.
+pub fn convert_lapper_chrom_names_to_ids(
     lapper: HashMap<String, Lapper<usize, u32>>,
     bam_stats: &BamStats,
 ) -> Result<HashMap<usize, Lapper<usize, u32>>> {
@@ -601,10 +652,10 @@ pub fn lapper_chrom_name_to_lapper_chrom_id(
     Ok(lapper_chrom_id)
 }
 
-/// Get the header of a BAM file
-/// If the noodles crate fails to read the header, we fall back to samtools
-/// This is a bit of a hack but it works for now
-/// The noodles crate is more strict about the header format than samtools
+/// Reads the header of a BAM file.
+///
+/// If the `noodles` crate fails to read the header, it falls back to `samtools`.
+/// This is useful for handling BAM files with slightly non-standard headers (e.g., from CellRanger).
 pub fn get_bam_header<P>(file_path: P) -> Result<sam::Header>
 where
     P: AsRef<Path>,

@@ -1,7 +1,12 @@
-//! This module implements pileup generation from one or multiple BAM files
-//! and converts the resulting signal into bedGraph and BigWig formats. The
-//! implementation is parallelized (using Rayon) and uses several libraries to
-//! process genomic intervals and to normalize and aggregate counts.
+//! # Coverage Analysis Module
+//!
+//! This module implements the core logic for generating coverage tracks (pileups) from
+//! one or multiple BAM files. It supports:
+//! *   Parallel processing of BAM files using Rayon.
+//! *   Generation of bedGraph and BigWig output formats.
+//! *   Normalization of coverage signals (RPKM, CPM, etc.).
+//! *   Handling of genomic intervals and binning.
+
 use std::fmt::{Display, Formatter, Result as FmtResult};
 use std::path::PathBuf;
 
@@ -472,6 +477,10 @@ impl BamPileup {
     }
 
     /// Write the normalized pileup as a bedGraph file.
+    ///
+    /// # Arguments
+    ///
+    /// * `outfile` - The path to the output bedGraph file.
     pub fn to_bedgraph(&self, outfile: PathBuf) -> Result<()> {
         info!("Writing bedGraph file to {}", outfile.display());
         let df = self.pileup_normalised()?;
@@ -482,6 +491,10 @@ impl BamPileup {
     /// Write the normalized pileup as a BigWig file.
     ///
     /// This function writes a temporary bedGraph file and converts it to BigWig.
+    ///
+    /// # Arguments
+    ///
+    /// * `outfile` - The path to the output BigWig file.
     pub fn to_bigwig(&self, outfile: PathBuf) -> Result<()> {
         let bam_stats = BamStats::new(self.file_path.clone())?;
         let chromsizes_file = tempfile::NamedTempFile::new()?;
@@ -535,6 +548,10 @@ pub struct MultiBamPileup {
 
 impl MultiBamPileup {
     /// Create a new [`MultiBamPileup`] from a vector of [`BamPileup`]s.
+    ///
+    /// # Arguments
+    ///
+    /// * `pileups` - A vector of `BamPileup` structs.
     pub fn new(pileups: Vec<BamPileup>) -> Self {
         Self {
             bam_pileups: pileups,
@@ -604,6 +621,11 @@ impl MultiBamPileup {
         Ok(df)
     }
 
+    /// Writes the multi-BAM pileup to a TSV file.
+    ///
+    /// # Arguments
+    ///
+    /// * `outfile` - The path to the output TSV file.
     pub fn to_tsv(&self, outfile: &PathBuf) -> Result<()> {
         let mut df = self.pileup()?;
         let mut file = std::fs::File::create(outfile)?;

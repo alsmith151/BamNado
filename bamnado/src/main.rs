@@ -258,7 +258,9 @@ fn create_filter_from_options(
         (Some(blacklist), Some(stats)) => {
             let lapper = bamnado::bam_utils::bed_to_lapper(blacklist.clone())
                 .context("Failed to read blacklisted locations")?;
-            let lapper = bamnado::bam_utils::lapper_chrom_name_to_lapper_chrom_id(lapper, stats)
+            
+            
+            let lapper = bamnado::bam_utils::convert_lapper_chrom_names_to_ids(lapper, stats)
                 .context("Failed to convert chrom names to chrom ids")?;
 
             // Merge overlapping intervals
@@ -431,7 +433,7 @@ fn main() -> Result<()> {
                     Some(blacklist) => {
                         let lapper = bamnado::bam_utils::bed_to_lapper(blacklist.clone())
                             .context("Failed to read blacklisted locations")?;
-                        let lapper = bamnado::bam_utils::lapper_chrom_name_to_lapper_chrom_id(
+                        let lapper = bamnado::bam_utils::convert_lapper_chrom_names_to_ids(
                             lapper, &bam_stats,
                         )
                         .context("Failed to convert chrom names to chrom ids")?;
