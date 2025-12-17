@@ -365,6 +365,33 @@ impl BamStats {
         Ok(chrom_chunks)
     }
 
+    pub fn chromosome_chunks(&self, chrom: &str, bin_size: u64) -> Result<Vec<Region>> {
+        let genome_chunk_length = self.estimate_genome_chunk_length(bin_size)?;
+        let stats = self
+            .chrom_stats
+            .get(chrom)
+            .ok_or_else(|| anyhow::Error::msg(format!("Chromosome {chrom} not found")))?;
+
+        let mut chunks = Vec::new();
+        let mut chunk_start = 1;
+        let chrom_end = stats.length;
+
+        while chunk_start <= chrom_end {
+            // Corrected to include the last position in the range
+            let chunk_end = chunk_start + genome_chunk_length - 1; // Adjust to ensure the chunk covers exactly genome_chunk_length positions
+            let chunk_end = chunk_end.min(chrom_end); // Ensure we do not exceed the chromosome length
+
+            let start = Position::try_from(chunk_start as usize).unwrap();
+            let end = Position::try_from(chunk_end as usize).unwrap();
+
+            let region = Region::new(chrom, start..=end);
+            chunks.push(region);
+            chunk_start = chunk_end + 1; // Corrected to start the next chunk right after the current chunk ends
+        }
+
+        Ok(chunks)
+    }
+
     pub fn chromosome_id_to_chromosome_name_mapping(&self) -> HashMap<usize, String> {
         let mut ref_id_mapping = HashMap::default();
         for (i, (name, _)) in self.header.reference_sequences().iter().enumerate() {

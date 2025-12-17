@@ -72,7 +72,10 @@ impl BamModifier {
         for region in query_regions {
             progress.inc(1);
             let mut query = reader.query(&header, &index, &region)?;
-            while let Some(record) = query.try_next().await? {
+            
+            
+            let mut record = noodles::bam::Record::default();
+            while query.read_record(&mut record).await? != 0 {
                 let is_valid = self.filter.is_valid(&record, Some(&header))?;
                 if !is_valid {
                     continue;

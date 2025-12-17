@@ -5,6 +5,31 @@ build-backend = "maturin"
 [tool.maturin]
 # "extension-module" tells pyo3 we want to build an extension module (skips linking against libpython.so)
 features = ["pyo3/extension-module"]
+python-source = "python"
+module-name = "bamnado._bamnado"
+# Build artifacts with the specified Cargo profile
+profile = "release"
+# For "editable" builds, use the specified Cargo profile,
+# e.g. to use "dev" builds for local development
+# (uses `profile` if this key is not set)
+editable-profile = "release"
+# List of features to activate
+# Activate all available features
+all-features = false
+# Do not activate the `default` feature
+no-default-features = false
+# Cargo manifest path
+manifest-path = "Cargo.toml"
+# Require Cargo.lock and cache are up to date
+frozen = false
+# Require Cargo.lock is up to date
+locked = false
+# Override a configuration value (unstable)
+config = []
+# Unstable (nightly-only) flags to Cargo, see 'cargo -Z help' for details
+unstable-flags = []
+# Extra arguments that will be passed to rustc as `cargo rustc [...] -- [...] [arg1] [arg2]`
+rustc-args = []
 
 [project]
 name = "bamnado"

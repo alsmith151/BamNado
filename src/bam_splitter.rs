@@ -74,7 +74,9 @@ impl BamFilterer {
             // println!("Querying region: {:?}", region);
 
             let mut query = reader.query(&header, &index, &region)?;
-            while let Some(record) = query.try_next().await? {
+            let mut record = bam::Record::default();
+
+            while query.read_record(&mut record).await? != 0  {
                 let is_valid = self.filter.is_valid(&record, Some(&header))?;
                 if is_valid {
                     writer.write_record(&header, &record).await?;
@@ -147,7 +149,7 @@ impl BamFilterer {
                     .expect("Error getting chunk of reads");
 
                 let filtered_records = records
-                    .into_iter()
+                    .records()
                     .filter_map(|r| r.is_ok().then(|| r.unwrap()))
                     .filter(|record| self.filter.is_valid(record, Some(&header)).unwrap_or(false))
                     .collect::<Vec<_>>();

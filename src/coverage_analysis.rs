@@ -180,11 +180,118 @@ impl BamPileup {
         normalization_factor
     }
 
+    /// Generate pileup for a single chromosome.
+    /// Returns a vector of intervals (with start, stop and count) for the chromosome.
+    pub fn pileup_chromosome(&self, chrom: &str) -> Result<Vec<Iv>> {
+        let bam_stats = BamStats::new(self.file_path.clone())?;
+        let genomic_chunks = bam_stats.chromosome_chunks(chrom, self.bin_size)?;
+        let chromsizes_refid = bam_stats.chromsizes_ref_id()?;
+        let n_total_chunks = genomic_chunks.len();
+
+        let header = get_bam_header(self.file_path.clone())?;
+        // Process each genomic chunk in parallel.
+        let pileup: Vec<Iv> = genomic_chunks
+            .into_par_iter()
+            .progress_with(progress_bar(
+                n_total_chunks as u64,
+                format!("Performing pileup for chromosome {chrom}"),
+            ))
+            .map(|region| {
+                // Each thread creates its own BAM reader.
+                let mut reader = bam::io::indexed_reader::Builder::default()
+                    .build_from_path(self.file_path.clone())
+                    .context("Failed to open BAM file")?;   
+                // Query for reads overlapping the region.
+                let records = reader.query(&header, &region)?;
+                // Create intervals from each read that passes filtering.
+                let intervals: Vec<Iv> = records
+                    .records()
+                    .filter_map(|record| record.ok())
+                    .filter_map(|record| {
+                        IntervalMaker::new(
+                            record,
+                            &header,
+                            &chromsizes_refid,
+                            &self.filter,
+                            self.use_fragment,
+                            self.shift,
+                            self.truncate,
+                        )
+                        .coords()
+                        .map(|(s, e, _dtlen)| Iv {
+                            start: s,
+                            stop: e,
+                            val: 1,
+                        })
+                    })
+                    .collect();
+                // Use a Lapper to count overlapping intervals in bins.
+                let lapper = Lapper::new(intervals);
+                let region_interval = region.interval();
+                let region_start = region_interval
+                    .start()
+                    .context("Failed to get region start")?
+                    .get();
+                let region_end = region_interval
+                    .end()
+                    .context("Failed to get region end")?
+                    .get(); 
+                let mut bin_counts: Vec<Iv> = Vec::new();
+                let mut start = region_start;
+                while start < region_end {
+                    let end = (start + self.bin_size as usize).min(region_end);
+                    let count = lapper.count(start, end);
+                    match self.collapse {
+                        true => {
+                            if let Some(last) = bin_counts.last_mut() {
+                                if last.val == count as u32 {
+                                    last.stop = end;
+                                } else {
+                                    bin_counts.push(Iv {
+                                        start,
+                                        stop: end,
+                                        val: count as u32,
+                                    });
+                                }
+                            } else {
+                                bin_counts.push(Iv {
+                                    start,
+                                    stop: end,
+                                    val: count as u32,
+                                });
+                            }
+                        }
+                        false => {
+                            bin_counts.push(Iv {
+                                start,
+                                stop: end,
+                                val: count as u32,
+                            });
+                        }
+                    }
+                    start = end;
+                }
+                Ok(bin_counts)
+            })
+            // Combine the results from parallel threads.
+            .fold(Vec::new, |mut acc, result: Result<Vec<Iv>>| {
+                if let Ok(mut intervals) = result {
+                    acc.append(&mut intervals);
+                }
+                acc
+            })
+            .reduce(Vec::new, |mut acc, mut vec| {
+                acc.append(&mut vec);
+                acc
+            });
+        Ok(pileup)
+    }
+
     /// Generate pileup intervals for the BAM file.
     ///
     /// Returns a map from chromosome names to a vector of intervals (with
     /// start, stop and count) for each genomic chunk.
-    fn pileup(&self) -> Result<HashMap<String, Vec<Iv>>> {
+    fn pileup_genome(&self) -> Result<HashMap<String, Vec<Iv>>> {
         let bam_stats = BamStats::new(self.file_path.clone())?;
         let genomic_chunks = bam_stats.genome_chunks(self.bin_size)?;
         let chromsizes_refid = bam_stats.chromsizes_ref_id()?;
@@ -213,7 +320,7 @@ impl BamPileup {
 
                 // Create intervals from each read that passes filtering.
                 let intervals: Vec<Iv> = records
-                    .into_iter()
+                    .records()
                     .filter_map(|record| record.ok())
                     .filter_map(|record| {
                         IntervalMaker::new(
@@ -312,7 +419,7 @@ impl BamPileup {
     ///
     /// The DataFrame will have columns "chrom", "start", "end" and "score".
     fn pileup_to_polars(&self) -> Result<DataFrame> {
-        let pileup = self.pileup()?;
+        let pileup = self.pileup_genome()?;
 
         // Process each chromosome in parallel and combine into column vectors.
         let (chroms, starts, ends, scores) = pileup

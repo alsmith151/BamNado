@@ -13,5 +13,15 @@ Cargo.lock
 .DS_Store
 test/data/examine_test_data.ipynb
 
+# Any ABI or .so files
+*.so
+*.dylib
+*.dll
+*.pyc
+__pycache__/
+
+
 # Pre-commit
 .pre-commit-cache/
+test.ipynb
+
