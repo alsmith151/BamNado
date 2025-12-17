@@ -6,6 +6,40 @@ High-performance tools and utilities for manipulation of BAM files for specializ
 
 BamNado is a Rust-based toolkit designed to handle complex BAM file operations that are common in modern genomics workflows, particularly in single-cell and multi-modal cellular characterization experiments. It provides efficient, cross-platform tools for coverage calculation, read filtering, file splitting, and various BAM file transformations.
 
+## Python Interface
+
+BamNado also provides a Python interface for direct access to its high-performance BAM processing capabilities.
+
+### Installation
+
+You can install the Python package directly from the source using `pip` or `uv`:
+
+```bash
+pip install .
+# or
+uv pip install .
+```
+
+### Usage
+
+```python
+import bamnado
+import numpy as np
+
+# Get coverage signal for a chromosome
+signal = bamnado.get_signal_for_chromosome(
+    bam_path="path/to/file.bam",
+    chromosome_name="chr1",
+    bin_size=50,
+    scale_factor=1.0,
+    use_fragment=False,
+    ignore_scaffold_chromosomes=True
+)
+
+# signal is a numpy array of floats
+print(f"Mean coverage: {np.mean(signal)}")
+```
+
 ## Installation
 
 BamNado can be installed in several ways. Choose the method that best fits your needs:
@@ -53,7 +87,7 @@ The easiest way to get started is to download a pre-compiled binary from our [re
    ./bamnado --version
    ```
 
-   You should see output like: `bamnado 0.3.1`
+   You should see output like: `bamnado 0.3.2`
 
 5. **Install system-wide** (optional but recommended)
 

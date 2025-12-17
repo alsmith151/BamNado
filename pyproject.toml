@@ -33,7 +33,7 @@ rustc-args = []
 
 [project]
 name = "bamnado"
-version = "0.3.0"
+version = "0.3.2"
 description = 'Python bindings for BamNado'
 authors = [{name = 'asmith', email = 'alastair.smith@ndcls.ox.ac.uk'}]
 dependencies = [
