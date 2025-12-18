@@ -295,6 +295,9 @@ jobs:
             esac
           done
 
+          # Copy wheels and sdist to release assets
+          find artifacts -name "*.whl" -o -name "*.tar.gz" | xargs -I{} cp {} release-assets/
+
           # Make binaries executable (except Windows)
           chmod +x release-assets/bamnado-linux-* || true
           chmod +x release-assets/bamnado-macos-* || true
