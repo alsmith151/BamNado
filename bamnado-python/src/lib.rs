@@ -7,7 +7,6 @@
 //!
 //! *   `get_signal_for_chromosome`: Calculates coverage signal for a chromosome.
 
-use anyhow;
 use ndarray::prelude::*;
 use numpy::{PyArray1, prelude::*};
 use pyo3::exceptions::{PyKeyError, PyRuntimeError};
@@ -54,10 +53,10 @@ mod _bamnado {
         use_fragment: bool,
         ignore_scaffold_chromosomes: bool,
     ) -> PyResult<Py<PyArray1<f32>>> {
-        let stats = bam_utils::BamStats::new(bam_path.into()).map_err(|e| anyhow_to_pyerr(e))?;
+        let stats = bam_utils::BamStats::new(bam_path.into()).map_err(anyhow_to_pyerr)?;
         let chrom_size = match stats
             .chromsizes_ref_name()
-            .map_err(|x| anyhow_to_pyerr(x))?
+            .map_err(anyhow_to_pyerr)?
             .get(chromosome_name)
         {
             Some(size) => *size,
@@ -84,13 +83,13 @@ mod _bamnado {
 
         let signal = bam_pileup
             .pileup_chromosome(chromosome_name)
-            .map_err(|e| anyhow_to_pyerr(e))?;
+            .map_err(anyhow_to_pyerr)?;
 
         // Put the signal into an ndarray then convert to numpy array
         let mut array = Array1::zeros(chrom_size as usize);
         for interval in signal {
-            let start = interval.start as usize;
-            let end = interval.stop as usize;
+            let start = interval.start;
+            let end = interval.stop;
             let value = interval.val as f32;
             array.slice_mut(s![start..end]).fill(value);
         }
