@@ -115,15 +115,15 @@ jobs:
           if [[ "${{ matrix.os }}" == "ubuntu-latest" ]] || [[ "${{ matrix.os }}" == "ubuntu-20.04" ]] || [[ "${{ matrix.os }}" == "ubuntu-22.04" ]] || [[ "${{ matrix.os }}" == "ubuntu-24.04" ]]; then
             # Use cross for Linux targets (works for both musl and gnu, and for aarch64)
             echo "Using cross to build ${T}"
-            cross build --release --target "${T}"
+            cross build --release --target "${T}" -p bamnado
           elif [[ "${{ matrix.os }}" == "macos-latest" ]] || [[ "${{ matrix.os }}" == "macos-14" ]]; then
             # macOS runner: native cargo build
             echo "Using cargo (native) to build ${T} on macOS runner"
-            cargo build --release --target "${T}"
+            cargo build --release --target "${T}" -p bamnado
           else
             # windows or other runners: native cargo build (windows runner has MSVC)
             echo "Using cargo (native) to build ${T} on $RUNNER_OS"
-            cargo build --release --target "${T}"
+            cargo build --release --target "${T}" -p bamnado
           fi
         shell: bash
 
