@@ -1,7 +1,14 @@
+//! # Count Module
+//!
 //! This module implements pileup generation from one or multiple BAM files
-//! and converts the resulting signal into bedGraph and BigWig formats. The
-//! implementation is parallelized (using Rayon) and uses several libraries to
-//! process genomic intervals and to normalize and aggregate counts.
+//! and converts the resulting signal into bedGraph and BigWig formats.
+//!
+//! It supports:
+//! *   Parallel processing using Rayon.
+//! *   Normalization of counts (RPKM, CPM, etc.).
+//! *   Aggregation of signals from multiple BAM files.
+//! *   Output to standard genomic formats.
+
 use std::fmt::{Display, Formatter, Result as FmtResult};
 use std::path::PathBuf;
 use std::process::Command;

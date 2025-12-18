@@ -1,3 +1,14 @@
+//! # BAM Splitter Module
+//!
+//! This module handles the splitting of BAM files into smaller subsets or filtering them
+//! based on user-defined criteria. It supports asynchronous processing and parallel execution
+//! to efficiently handle large genomic datasets.
+//!
+//! Key features include:
+//! *   Splitting BAM files by barcodes or other tags.
+//! *   Filtering reads during the splitting process.
+//! *   Asynchronous I/O for high performance.
+
 use crate::bam_utils::BamStats;
 use crate::bam_utils::get_bam_header;
 use crate::read_filter::BamReadFilter;
@@ -13,10 +24,9 @@ use noodles::core::{Position, Region};
 use noodles::bam::r#async::io::{Reader as AsyncReader, Writer as AsyncWriter};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use std::path::PathBuf;
-
-use futures::TryStreamExt;
 use tokio::fs::File;
 
+/// Filters BAM files based on read criteria.
 pub struct BamFilterer {
     filepath: PathBuf,
     output: PathBuf,
@@ -24,6 +34,13 @@ pub struct BamFilterer {
 }
 
 impl BamFilterer {
+    /// Creates a new `BamFilterer`.
+    ///
+    /// # Arguments
+    ///
+    /// * `filepath` - Path to the input BAM file.
+    /// * `output` - Path to the output BAM file.
+    /// * `filter` - Filter criteria for reads.
     pub fn new(filepath: PathBuf, output: PathBuf, filter: BamReadFilter) -> Self {
         BamFilterer {
             filepath,
@@ -32,6 +49,9 @@ impl BamFilterer {
         }
     }
 
+    /// Runs the filtering process asynchronously.
+    ///
+    /// This reads the input BAM, filters reads, and writes the result to the output file.
     pub async fn split_async(&self) -> Result<()> {
         let filepath = self.filepath.clone();
         let outfile = self.output.clone();
@@ -74,7 +94,9 @@ impl BamFilterer {
             // println!("Querying region: {:?}", region);
 
             let mut query = reader.query(&header, &index, &region)?;
-            while let Some(record) = query.try_next().await? {
+            let mut record = bam::Record::default();
+
+            while query.read_record(&mut record).await? != 0 {
                 let is_valid = self.filter.is_valid(&record, Some(&header))?;
                 if is_valid {
                     writer.write_record(&header, &record).await?;
@@ -147,7 +169,7 @@ impl BamFilterer {
                     .expect("Error getting chunk of reads");
 
                 let filtered_records = records
-                    .into_iter()
+                    .records()
                     .filter_map(|r| r.is_ok().then(|| r.unwrap()))
                     .filter(|record| self.filter.is_valid(record, Some(&header)).unwrap_or(false))
                     .collect::<Vec<_>>();

@@ -5,9 +5,60 @@ build-backend = "maturin"
 [tool.maturin]
 # "extension-module" tells pyo3 we want to build an extension module (skips linking against libpython.so)
 features = ["pyo3/extension-module"]
+python-source = "bamnado-python/python"
+module-name = "bamnado._bamnado"
+# Build artifacts with the specified Cargo profile
+profile = "release"
+# For "editable" builds, use the specified Cargo profile,
+# e.g. to use "dev" builds for local development
+# (uses `profile` if this key is not set)
+editable-profile = "release"
+# List of features to activate
+# Activate all available features
+all-features = false
+# Do not activate the `default` feature
+no-default-features = false
+# Cargo manifest path
+manifest-path = "bamnado-python/Cargo.toml"
+# Require Cargo.lock and cache are up to date
+frozen = false
+# Require Cargo.lock is up to date
+locked = false
+# Override a configuration value (unstable)
+config = []
+# Unstable (nightly-only) flags to Cargo, see 'cargo -Z help' for details
+unstable-flags = []
+# Extra arguments that will be passed to rustc as `cargo rustc [...] -- [...] [arg1] [arg2]`
+rustc-args = []
 
 [project]
 name = "bamnado"
-version = "0.3.0"
+version = "0.3.2"
 description = 'Python bindings for BamNado'
-authors = [{name = 'asmith', email = 'alastair.smith@ndcls.ox.ac.uk'}]
+authors = [{name = 'Alastair Smith', email = 'alastair.smith@ndcls.ox.ac.uk'}]
+readme = "README.md"
+license = {text = "MIT OR Apache-2.0"}
+keywords = ["bioinformatics", "scATAC-seq", "MCC", "BAM"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Rust",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS :: MacOS X",
+    "Operating System :: Microsoft :: Windows",
+]
+requires-python = ">=3.10"
+dependencies = [
+  "numpy >= 2",
+]
+
+[project.urls]
+Homepage = "https://github.com/alsmith151/BamNado"
+Repository = "https://github.com/alsmith151/BamNado"
+Documentation = "https://alsmith151.github.io/BamNado/"
+
+[project.optional-dependencies]
+test = ["pytest>=7.0", "pytest-cov>=4.0"]

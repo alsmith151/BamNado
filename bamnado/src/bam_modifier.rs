@@ -1,3 +1,11 @@
+//! # BAM Modifier Module
+//!
+//! This module provides functionality for modifying BAM files, such as applying Tn5 shifts
+//! to read coordinates and filtering reads based on specific criteria.
+//!
+//! It is useful for preprocessing BAM files before downstream analysis, ensuring that
+//! reads are correctly positioned and filtered.
+
 use crate::bam_utils::get_bam_header;
 
 use crate::read_filter::BamReadFilter;
@@ -12,10 +20,9 @@ use noodles::bam::bai;
 use noodles::core::{Position, Region};
 
 use std::path::PathBuf;
-
-use futures::TryStreamExt;
 use tokio::fs::File;
 
+/// Modifies BAM files by filtering reads and optionally applying Tn5 shifts.
 pub struct BamModifier {
     filepath: PathBuf,
     output: PathBuf,
@@ -24,6 +31,14 @@ pub struct BamModifier {
 }
 
 impl BamModifier {
+    /// Creates a new `BamModifier`.
+    ///
+    /// # Arguments
+    ///
+    /// * `filepath` - Path to the input BAM file.
+    /// * `output` - Path to the output BAM file.
+    /// * `filter` - Filter criteria for reads.
+    /// * `tn5_shift` - Whether to apply Tn5 shift adjustments.
     pub fn new(filepath: PathBuf, output: PathBuf, filter: BamReadFilter, tn5_shift: bool) -> Self {
         BamModifier {
             filepath,
@@ -33,6 +48,10 @@ impl BamModifier {
         }
     }
 
+    /// Runs the modification process asynchronously.
+    ///
+    /// This reads the input BAM, filters reads, applies shifts if requested,
+    /// and writes the result to the output file.
     pub async fn run(&self) -> Result<()> {
         let filepath = self.filepath.clone();
         let outfile = self.output.clone();
@@ -72,7 +91,9 @@ impl BamModifier {
         for region in query_regions {
             progress.inc(1);
             let mut query = reader.query(&header, &index, &region)?;
-            while let Some(record) = query.try_next().await? {
+
+            let mut record = noodles::bam::Record::default();
+            while query.read_record(&mut record).await? != 0 {
                 let is_valid = self.filter.is_valid(&record, Some(&header))?;
                 if !is_valid {
                     continue;

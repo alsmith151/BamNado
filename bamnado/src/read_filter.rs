@@ -1,3 +1,14 @@
+//! # Read Filter Module
+//!
+//! This module defines structures and logic for filtering BAM reads. It allows users to
+//! include or exclude reads based on:
+//! *   Mapping quality (MAPQ).
+//! *   SAM flags (e.g., proper pair, unmapped, duplicate).
+//! *   Read length.
+//! *   Genomic blacklists.
+//! *   Cell barcodes and read groups.
+//! *   Strand orientation.
+
 use ahash::{HashMap, HashSet};
 use anyhow::{Context, Result};
 use noodles::sam;
@@ -10,6 +21,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::bam_utils::CB;
 
+/// Statistics for the read filtering process.
+///
+/// Tracks the number of reads filtered by each criterion.
 #[derive(Debug)]
 pub struct BamReadFilterStats {
     // Total number of reads
@@ -37,6 +51,7 @@ impl Default for BamReadFilterStats {
 }
 
 impl BamReadFilterStats {
+    /// Creates a new `BamReadFilterStats` with all counters set to zero.
     pub fn new() -> Self {
         Self {
             n_total: AtomicU64::new(0),
@@ -50,6 +65,7 @@ impl BamReadFilterStats {
         }
     }
 
+    /// Takes a snapshot of the current statistics.
     pub fn snapshot(&self) -> BamReadFilterStatsSnapshot {
         BamReadFilterStatsSnapshot {
             n_total: self.n_total.load(Ordering::Relaxed),
@@ -64,6 +80,7 @@ impl BamReadFilterStats {
     }
 }
 
+/// A snapshot of the read filter statistics at a specific point in time.
 #[derive(Clone, Copy, Debug)]
 pub struct BamReadFilterStatsSnapshot {
     n_total: u64,
@@ -97,12 +114,12 @@ impl Display for BamReadFilterStatsSnapshot {
                 + self.n_failed_barcode
                 + self.n_not_in_read_group
                 + self.n_incorrect_strand
-        )?;
-        Ok(())
+        )
     }
 }
 
 impl BamReadFilterStatsSnapshot {
+    /// Returns the number of reads remaining after filtering.
     pub fn n_reads_after_filtering(&self) -> u64 {
         self.n_total
             - (self.n_failed_proper_pair
@@ -116,6 +133,7 @@ impl BamReadFilterStatsSnapshot {
 }
 
 /// A filter for BAM reads.
+///
 /// Set the minimum mapping quality, minimum and maximum read length, blacklisted locations, and whitelisted barcodes.
 /// The filter is applied to each read in the BAM file.
 #[derive(Debug, Clone)]
@@ -196,6 +214,18 @@ impl Default for BamReadFilter {
 }
 
 impl BamReadFilter {
+    /// Creates a new `BamReadFilter`.
+    ///
+    /// # Arguments
+    ///
+    /// * `strand` - The strand to keep.
+    /// * `proper_pair` - Whether to keep only properly paired reads.
+    /// * `min_mapq` - Minimum mapping quality.
+    /// * `min_length` - Minimum read length.
+    /// * `max_length` - Maximum read length.
+    /// * `read_group` - Read group to keep.
+    /// * `blacklisted_locations` - Genomic regions to exclude.
+    /// * `whitelisted_barcodes` - Cell barcodes to keep.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         strand: bio_types::strand::Strand,
@@ -224,6 +254,7 @@ impl BamReadFilter {
         }
     }
 
+    /// Checks if a read is valid according to the filter criteria.
     pub fn is_valid<R>(&self, alignment: &R, header: Option<&sam::Header>) -> Result<bool>
     where
         R: sam::alignment::Record,
@@ -370,6 +401,7 @@ impl BamReadFilter {
         Ok(true)
     }
 
+    /// Returns a snapshot of the current filter statistics.
     pub fn stats(&self) -> BamReadFilterStatsSnapshot {
         self.stats.snapshot()
     }

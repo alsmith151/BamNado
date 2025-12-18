@@ -71,10 +71,51 @@ jobs:
       - run: |
           cargo test --all-features
 
+  python-test:
+    name: Python Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "shared"
+          cache-all-crates: "true"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Build and install bamnado
+        run: |
+          uv venv
+          uv pip install maturin pytest numpy
+          source .venv/bin/activate
+          maturin develop
+
+      - name: Run tests
+        run: |
+          source .venv/bin/activate
+          pytest test/test_interface.py
+
   build-dev:
     name: Build (dev)
     runs-on: ubuntu-latest
-    needs: [check, test]
+    needs: [check, test, python-test]
     steps:
       - uses: actions/checkout@v4
         with:
