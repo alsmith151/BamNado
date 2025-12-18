@@ -1,7 +1,12 @@
-//! This module implements pileup generation from one or multiple BAM files
-//! and converts the resulting signal into bedGraph and BigWig formats. The
-//! implementation is parallelized (using Rayon) and uses several libraries to
-//! process genomic intervals and to normalize and aggregate counts.
+//! # Coverage Analysis Module
+//!
+//! This module implements the core logic for generating coverage tracks (pileups) from
+//! one or multiple BAM files. It supports:
+//! *   Parallel processing of BAM files using Rayon.
+//! *   Generation of bedGraph and BigWig output formats.
+//! *   Normalization of coverage signals (RPKM, CPM, etc.).
+//! *   Handling of genomic intervals and binning.
+
 use std::fmt::{Display, Formatter, Result as FmtResult};
 use std::path::PathBuf;
 
@@ -180,11 +185,118 @@ impl BamPileup {
         normalization_factor
     }
 
+    /// Generate pileup for a single chromosome.
+    /// Returns a vector of intervals (with start, stop and count) for the chromosome.
+    pub fn pileup_chromosome(&self, chrom: &str) -> Result<Vec<Iv>> {
+        let bam_stats = BamStats::new(self.file_path.clone())?;
+        let genomic_chunks = bam_stats.chromosome_chunks(chrom, self.bin_size)?;
+        let chromsizes_refid = bam_stats.chromsizes_ref_id()?;
+        let n_total_chunks = genomic_chunks.len();
+
+        let header = get_bam_header(self.file_path.clone())?;
+        // Process each genomic chunk in parallel.
+        let pileup: Vec<Iv> = genomic_chunks
+            .into_par_iter()
+            .progress_with(progress_bar(
+                n_total_chunks as u64,
+                format!("Performing pileup for chromosome {chrom}"),
+            ))
+            .map(|region| {
+                // Each thread creates its own BAM reader.
+                let mut reader = bam::io::indexed_reader::Builder::default()
+                    .build_from_path(self.file_path.clone())
+                    .context("Failed to open BAM file")?;
+                // Query for reads overlapping the region.
+                let records = reader.query(&header, &region)?;
+                // Create intervals from each read that passes filtering.
+                let intervals: Vec<Iv> = records
+                    .records()
+                    .filter_map(|record| record.ok())
+                    .filter_map(|record| {
+                        IntervalMaker::new(
+                            record,
+                            &header,
+                            &chromsizes_refid,
+                            &self.filter,
+                            self.use_fragment,
+                            self.shift,
+                            self.truncate,
+                        )
+                        .coords()
+                        .map(|(s, e, _dtlen)| Iv {
+                            start: s,
+                            stop: e,
+                            val: 1,
+                        })
+                    })
+                    .collect();
+                // Use a Lapper to count overlapping intervals in bins.
+                let lapper = Lapper::new(intervals);
+                let region_interval = region.interval();
+                let region_start = region_interval
+                    .start()
+                    .context("Failed to get region start")?
+                    .get();
+                let region_end = region_interval
+                    .end()
+                    .context("Failed to get region end")?
+                    .get();
+                let mut bin_counts: Vec<Iv> = Vec::new();
+                let mut start = region_start;
+                while start < region_end {
+                    let end = (start + self.bin_size as usize).min(region_end);
+                    let count = lapper.count(start, end);
+                    match self.collapse {
+                        true => {
+                            if let Some(last) = bin_counts.last_mut() {
+                                if last.val == count as u32 {
+                                    last.stop = end;
+                                } else {
+                                    bin_counts.push(Iv {
+                                        start,
+                                        stop: end,
+                                        val: count as u32,
+                                    });
+                                }
+                            } else {
+                                bin_counts.push(Iv {
+                                    start,
+                                    stop: end,
+                                    val: count as u32,
+                                });
+                            }
+                        }
+                        false => {
+                            bin_counts.push(Iv {
+                                start,
+                                stop: end,
+                                val: count as u32,
+                            });
+                        }
+                    }
+                    start = end;
+                }
+                Ok(bin_counts)
+            })
+            // Combine the results from parallel threads.
+            .fold(Vec::new, |mut acc, result: Result<Vec<Iv>>| {
+                if let Ok(mut intervals) = result {
+                    acc.append(&mut intervals);
+                }
+                acc
+            })
+            .reduce(Vec::new, |mut acc, mut vec| {
+                acc.append(&mut vec);
+                acc
+            });
+        Ok(pileup)
+    }
+
     /// Generate pileup intervals for the BAM file.
     ///
     /// Returns a map from chromosome names to a vector of intervals (with
     /// start, stop and count) for each genomic chunk.
-    fn pileup(&self) -> Result<HashMap<String, Vec<Iv>>> {
+    fn pileup_genome(&self) -> Result<HashMap<String, Vec<Iv>>> {
         let bam_stats = BamStats::new(self.file_path.clone())?;
         let genomic_chunks = bam_stats.genome_chunks(self.bin_size)?;
         let chromsizes_refid = bam_stats.chromsizes_ref_id()?;
@@ -213,7 +325,7 @@ impl BamPileup {
 
                 // Create intervals from each read that passes filtering.
                 let intervals: Vec<Iv> = records
-                    .into_iter()
+                    .records()
                     .filter_map(|record| record.ok())
                     .filter_map(|record| {
                         IntervalMaker::new(
@@ -312,7 +424,7 @@ impl BamPileup {
     ///
     /// The DataFrame will have columns "chrom", "start", "end" and "score".
     fn pileup_to_polars(&self) -> Result<DataFrame> {
-        let pileup = self.pileup()?;
+        let pileup = self.pileup_genome()?;
 
         // Process each chromosome in parallel and combine into column vectors.
         let (chroms, starts, ends, scores) = pileup
@@ -365,6 +477,10 @@ impl BamPileup {
     }
 
     /// Write the normalized pileup as a bedGraph file.
+    ///
+    /// # Arguments
+    ///
+    /// * `outfile` - The path to the output bedGraph file.
     pub fn to_bedgraph(&self, outfile: PathBuf) -> Result<()> {
         info!("Writing bedGraph file to {}", outfile.display());
         let df = self.pileup_normalised()?;
@@ -375,6 +491,10 @@ impl BamPileup {
     /// Write the normalized pileup as a BigWig file.
     ///
     /// This function writes a temporary bedGraph file and converts it to BigWig.
+    ///
+    /// # Arguments
+    ///
+    /// * `outfile` - The path to the output BigWig file.
     pub fn to_bigwig(&self, outfile: PathBuf) -> Result<()> {
         let bam_stats = BamStats::new(self.file_path.clone())?;
         let chromsizes_file = tempfile::NamedTempFile::new()?;
@@ -428,6 +548,10 @@ pub struct MultiBamPileup {
 
 impl MultiBamPileup {
     /// Create a new [`MultiBamPileup`] from a vector of [`BamPileup`]s.
+    ///
+    /// # Arguments
+    ///
+    /// * `pileups` - A vector of `BamPileup` structs.
     pub fn new(pileups: Vec<BamPileup>) -> Self {
         Self {
             bam_pileups: pileups,
@@ -497,6 +621,11 @@ impl MultiBamPileup {
         Ok(df)
     }
 
+    /// Writes the multi-BAM pileup to a TSV file.
+    ///
+    /// # Arguments
+    ///
+    /// * `outfile` - The path to the output TSV file.
     pub fn to_tsv(&self, outfile: &PathBuf) -> Result<()> {
         let mut df = self.pileup()?;
         let mut file = std::fs::File::create(outfile)?;
@@ -531,6 +660,13 @@ mod tests {
             None,
             None,
         )
+    }
+
+    fn get_test_data_dir() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("Failed to get workspace root")
+            .join("test/data")
     }
 
     #[test]
@@ -617,11 +753,7 @@ mod tests {
 
     #[test]
     fn test_bam_to_bigwig_raw_scale() {
-        let test_data_dir = PathBuf::from(file!())
-            .ancestors()
-            .nth(2)
-            .unwrap()
-            .join("test/data");
+        let test_data_dir = get_test_data_dir();
         let temp_dir = TempDir::new().unwrap();
         let bam_file = test_data_dir.join("test.bam");
         let output_path = temp_dir.path().join("test.bw");
@@ -655,11 +787,7 @@ mod tests {
 
     #[test]
     fn test_bam_to_bigwig_cpm_scale() {
-        let test_data_dir = PathBuf::from(file!())
-            .ancestors()
-            .nth(2)
-            .unwrap()
-            .join("test/data");
+        let test_data_dir = get_test_data_dir();
         let temp_dir = TempDir::new().unwrap();
         let bam_file = test_data_dir.join("test.bam");
         let output_path = temp_dir.path().join("test_cpm.bw");
@@ -694,11 +822,7 @@ mod tests {
 
     #[test]
     fn test_bam_to_bigwig_rpkm_scale() {
-        let test_data_dir = PathBuf::from(file!())
-            .ancestors()
-            .nth(2)
-            .unwrap()
-            .join("test/data");
+        let test_data_dir = get_test_data_dir();
         let temp_dir = TempDir::new().unwrap();
         let bam_file = test_data_dir.join("test.bam");
         let output_path = temp_dir.path().join("test_rpkm.bw");

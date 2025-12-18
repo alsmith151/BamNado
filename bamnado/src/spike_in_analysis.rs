@@ -1,3 +1,11 @@
+//! # Spike-in Analysis Module
+//!
+//! This module handles the analysis of spike-in controls for normalization purposes.
+//! It includes tools for:
+//! *   Tracking statistics of endogenous vs. exogenous (spike-in) reads.
+//! *   Calculating normalization factors based on spike-in counts.
+//! *   Serializing and deserializing spike-in statistics.
+
 use ahash::HashMap;
 use serde::ser::SerializeStruct;
 use serde::{Deserialize, Serialize};
@@ -10,6 +18,9 @@ use crossbeam::channel::unbounded;
 use log::info;
 use noodles::{bam, sam};
 
+/// Statistics for the read splitting process.
+///
+/// Tracks the number of reads assigned to each category (endogenous, exogenous, etc.).
 #[derive(Debug, Deserialize)]
 pub struct SplitStats {
     filename: String,
@@ -25,6 +36,7 @@ pub struct SplitStats {
 }
 
 impl SplitStats {
+    /// Create a new `SplitStats` struct.
     fn new(filename: String) -> Self {
         Self {
             filename,
@@ -40,6 +52,7 @@ impl SplitStats {
         }
     }
 
+    /// Calculate the normalization factor based on the number of exogenous reads.
     fn spikein_norm_factor(&self) -> f64 {
         // Calculate the ChIP spike-in normalization factor
         // df_counts["scale_factor"] = 1 / (df_counts["spikein_reads"] / 1e6)
@@ -55,6 +68,7 @@ impl SplitStats {
         }
     }
 
+    /// Calculate the percentage of reads that are exogenous.
     fn spikein_percentage(&self) -> f64 {
         (self.n_exogenous as f64 / self.n_endogenous as f64) * 100.0
     }
@@ -100,6 +114,10 @@ impl Serialize for SplitStats {
     }
 }
 
+/// A tool for splitting a BAM file into endogenous and exogenous reads.
+///
+/// Reads are classified based on the reference sequence they are mapped to.
+/// Reference sequences starting with `exogenous_prefix` are considered exogenous.
 pub struct BamSplitter {
     // The input BAM file
     input_bam: bam::io::Reader<noodles::bgzf::io::Reader<std::fs::File>>,
@@ -127,6 +145,13 @@ pub struct BamSplitter {
 }
 
 impl BamSplitter {
+    /// Create a new `BamSplitter`.
+    ///
+    /// # Arguments
+    ///
+    /// * `input_path` - Path to the input BAM file.
+    /// * `output_prefix` - Prefix for the output BAM files.
+    /// * `exogenous_prefix` - Prefix for exogenous reference sequences.
     pub fn new(
         input_path: PathBuf,
         output_prefix: PathBuf,
@@ -193,6 +218,9 @@ impl BamSplitter {
         })
     }
 
+    /// Split the input BAM file into endogenous and exogenous BAM files.
+    ///
+    /// Reads are processed in parallel and written to the corresponding output files.
     pub fn split(&mut self) -> Result<()> {
         let mut counter = 0;
 
@@ -357,22 +385,27 @@ impl BamSplitter {
         Ok(())
     }
 
+    /// Get the statistics for the split.
     pub fn stats(&self) -> &SplitStats {
         &self.stats
     }
 
+    /// Get the path to the endogenous BAM file.
     pub fn endogenous_file(&self) -> &Path {
         &self.endogenous_bam
     }
 
+    /// Get the path to the exogenous BAM file.
     pub fn exogenous_file(&self) -> &Path {
         &self.exogenous_bam
     }
 
+    /// Get the path to the BAM file containing reads mapping to both genomes.
     pub fn both_file(&self) -> &Path {
         &self.both_bam
     }
 
+    /// Get the path to the BAM file containing unmapped reads.
     pub fn unmapped_file(&self) -> &Path {
         &self.unmapped_bam
     }

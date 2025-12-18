@@ -9,15 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- New features that haven't been released yet
+- Comprehensive documentation (docstrings) for all structs and methods in `bamnado/src/`.
+- New Python interface for BamNado functionality, allowing usage of Rust-optimized tools directly from Python.
+
+### Fixed
+
+- Corrected placement of docstrings in `bam_utils.rs` and `read_filter.rs` to ensure `cargo doc` generates correct documentation.
 
 ### Changed
 
 - Changes in existing functionality
-
-### Fixed
-
-- Any bug fixes
 
 ## [0.3.1] - 2025-07-09
 

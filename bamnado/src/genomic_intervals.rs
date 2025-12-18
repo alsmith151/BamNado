@@ -1,3 +1,11 @@
+//! # Genomic Intervals Module
+//!
+//! This module provides tools for manipulating genomic intervals and coordinates.
+//! It includes functionality for:
+//! *   Parsing CIGAR strings to determine alignment spans.
+//! *   Shifting and truncating genomic coordinates (e.g., for Tn5 adjustments).
+//! *   Representing and operating on genomic regions.
+
 use std::cmp::min;
 use std::str::FromStr;
 
@@ -34,11 +42,18 @@ where
     })
 }
 
+/// Represents coordinate shifts to be applied to reads.
+///
+/// The shifts can be applied to the 5' and 3' ends of forward and reverse reads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Shift {
+    /// Shift for the 5' end of forward reads.
     pub five_prime: i32,
+    /// Shift for the 3' end of forward reads.
     pub three_prime: i32,
+    /// Shift for the 5' end of reverse reads.
     pub five_prime_reverse: i32,
+    /// Shift for the 3' end of reverse reads.
     pub three_prime_reverse: i32,
     index: usize,
 }
@@ -131,6 +146,7 @@ impl From<Vec<i32>> for Shift {
     }
 }
 
+/// Represents truncation values for reads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Truncate {
     five_prime: Option<usize>,
@@ -165,6 +181,9 @@ impl FromStr for Truncate {
     }
 }
 
+/// Helper struct for creating genomic intervals from BAM records.
+///
+/// It handles coordinate calculations, shifting, and truncation.
 pub struct IntervalMaker<'a> {
     read: bam::Record,
     header: &'a sam::Header,
@@ -176,6 +195,7 @@ pub struct IntervalMaker<'a> {
 }
 
 impl<'a> IntervalMaker<'a> {
+    /// Creates a new `IntervalMaker`.
     pub fn new(
         read: bam::Record,
         header: &'a sam::Header,
@@ -342,6 +362,9 @@ impl<'a> IntervalMaker<'a> {
         Ok((start, end, dtlen))
     }
 
+    /// Calculates the coordinates of the interval.
+    ///
+    /// Returns `(start, end, dtlen)` where `dtlen` is the change in template length.
     pub fn coords(&self) -> Option<(usize, usize, i32)> {
         // Changed return type
         match self.filter.is_valid(&self.read, Some(self.header)) {
@@ -391,6 +414,7 @@ impl<'a> IntervalMaker<'a> {
         (start, end)
     }
 
+    /// Creates a new BAM record with modified coordinates.
     pub fn record(&self) -> Option<RecordBuf> {
         let (start, _end, dtlen) = self.coords()?;
 

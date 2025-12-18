@@ -914,53 +914,63 @@ use crate::bam_utils::{BamStats, Iv, regions_to_lapper};
 //     inter = np.min(foo[interMask] / groupSizes[interMask])
 //     return (inter - intra) / max(inter, intra)
 
+/// Reference point for heatmap alignment.
 enum RefPoint {
+    /// Transcription Start Site.
     TSS,
+    /// Transcription End Site.
     TES,
+    /// Center of the region.
     Center,
 }
 
+/// Method for averaging values within a bin.
 enum BinAvgType {
+    /// Mean value.
     Mean,
+    /// Median value.
     Median,
+    /// Maximum value.
     Max,
 }
 
+/// Arguments for configuring the Heatmapper.
 struct HeatmapperArgs {
-    // The bin size to use for the heatmap
+    /// The bin size to use for the heatmap.
     bin_size: u32,
-    // The number of bins to use upstream of the region
+    /// The number of bins to use upstream of the region.
     upstream: u32,
-    // The number of bins to use downstream of the region
+    /// The number of bins to use downstream of the region.
     downstream: u32,
-    // The number of bins to use in the body of the region
+    /// The number of bins to use in the body of the region.
     body: u32,
-    // The number of bins to use in the unscaled 5 prime region
+    /// The number of bins to use in the unscaled 5 prime region.
     unscaled_5_prime: u32,
-    // The number of bins to use in the unscaled 3 prime region
+    /// The number of bins to use in the unscaled 3 prime region.
     unscaled_3_prime: u32,
-    // The type of average to use when computing the bin values
+    /// The type of average to use when computing the bin values.
     bin_avg_type: BinAvgType,
-    // Whether to treat missing data as zero
+    /// Whether to treat missing data as zero.
     missing_data_as_zero: bool,
-    // The minimum threshold for a bin value
+    /// The minimum threshold for a bin value.
     min_threshold: f32,
-    // The maximum threshold for a bin value
+    /// The maximum threshold for a bin value.
     max_threshold: f32,
-    // The scale to apply to the bin values
+    /// The scale to apply to the bin values.
     scale: f32,
-    // The reference point to use when computing the heatmap
+    /// The reference point to use when computing the heatmap.
     ref_point: RefPoint,
-    // Whether to treat NaN values after the end of the region as zero
+    /// Whether to treat NaN values after the end of the region as zero.
     nan_after_end: bool,
-    // Whether to print debug information
+    /// Whether to print debug information.
     debug: bool,
-    // Whether to print verbose information
+    /// Whether to print verbose information.
     verbose: bool,
-    // Whether to print quiet information
+    /// Whether to print quiet information.
     quiet: bool,
 }
 
+/// Type of score file (BigWig or BAM).
 enum ScoreFileType {
     BigWig,
     Bam,
@@ -978,6 +988,7 @@ impl FromStr for ScoreFileType {
     }
 }
 
+/// Main struct for generating heatmaps from genomic data.
 struct Heatmapper {
     score_file: PathBuf,
     score_file_type: ScoreFileType,
@@ -988,6 +999,7 @@ struct Heatmapper {
 }
 
 impl Heatmapper {
+    /// Creates a new `Heatmapper` instance.
     fn new(score_file: PathBuf, args: HeatmapperArgs, regions: Vec<Region>) -> Self {
         let n_regions = regions.len();
         let n_bins = ((args.upstream + args.downstream + args.body) / args.bin_size) as usize;
@@ -1005,6 +1017,7 @@ impl Heatmapper {
         }
     }
 
+    /// Reads regions from a BED file.
     fn read_bed(bed: PathBuf) -> Result<Vec<Region>> {
         let mut regions = Vec::new();
         let file = std::fs::File::open(bed)?;
@@ -1023,6 +1036,7 @@ impl Heatmapper {
         Ok(regions)
     }
 
+    /// Creates a `Heatmapper` from a BAM file and a BED file.
     pub fn from_bam(bam: PathBuf, bed: PathBuf, args: HeatmapperArgs) -> Result<Self> {
         // Construct the regions from the BED file
         let regions = Self::read_bed(bed)?;
@@ -1030,6 +1044,7 @@ impl Heatmapper {
         Ok(heatmapper)
     }
 
+    /// Creates a `Heatmapper` from a BigWig file and a BED file.
     pub fn from_bigwig(bigwig: PathBuf, bed: PathBuf, args: HeatmapperArgs) -> Result<Self> {
         // Construct the regions from the BED file
         let regions = Self::read_bed(bed)?;
@@ -1037,6 +1052,7 @@ impl Heatmapper {
         Ok(heatmapper)
     }
 
+    /// Computes the submatrix from the BAM file.
     pub fn submatrix_from_bam(&mut self) -> Result<()> {
         let bam = bam::io::indexed_reader::Builder::default().build_from_path(&self.score_file)?;
 

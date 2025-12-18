@@ -1,14 +1,31 @@
+//! # Signal Normalization Module
+//!
+//! This module provides methods for normalizing genomic coverage signals.
+//! It supports common normalization techniques used in sequencing analysis, such as:
+//! *   **Raw**: No normalization.
+//! *   **RPKM**: Reads Per Kilobase per Million mapped reads.
+//! *   **CPM**: Counts Per Million mapped reads.
+
 use anyhow::Result;
 use log::warn;
 
+/// Normalization methods for genomic coverage signals.
 #[derive(Debug, Clone, clap::ValueEnum)]
 pub enum NormalizationMethod {
+    /// No normalization.
     Raw,
+    /// Reads Per Kilobase per Million mapped reads.
     RPKM,
+    /// Counts Per Million mapped reads.
     CPM,
 }
 
 impl NormalizationMethod {
+    /// Parse a string into a `NormalizationMethod`.
+    ///
+    /// # Arguments
+    ///
+    /// * `s` - The string to parse.
     #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Result<NormalizationMethod> {
         match s.to_lowercase().as_str() {
