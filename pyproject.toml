@@ -12,7 +12,7 @@ profile = "release"
 # For "editable" builds, use the specified Cargo profile,
 # e.g. to use "dev" builds for local development
 # (uses `profile` if this key is not set)
-editable-profile = "release"
+editable-profile = "dev"
 # List of features to activate
 # Activate all available features
 all-features = false

@@ -7,7 +7,7 @@ description = "Tools and utilities for manipulation of BAM files for unusual use
 repository = "https://github.com/alsmith151/BamNado"
 homepage = "https://github.com/alsmith151/BamNado"
 authors = ["Alastair Smith <alastair.smith@ndcls.ox.ac.uk>"]
-readme = "README.md"
+readme = "../README.md"
 keywords = ["bioinformatics", "scATAC-seq", 'MCC']
 
 
