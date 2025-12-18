@@ -20,8 +20,6 @@ use noodles::bam::bai;
 use noodles::core::{Position, Region};
 
 use std::path::PathBuf;
-
-use futures::TryStreamExt;
 use tokio::fs::File;
 
 /// Modifies BAM files by filtering reads and optionally applying Tn5 shifts.
@@ -93,8 +91,7 @@ impl BamModifier {
         for region in query_regions {
             progress.inc(1);
             let mut query = reader.query(&header, &index, &region)?;
-            
-            
+
             let mut record = noodles::bam::Record::default();
             while query.read_record(&mut record).await? != 0 {
                 let is_valid = self.filter.is_valid(&record, Some(&header))?;

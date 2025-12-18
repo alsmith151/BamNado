@@ -24,8 +24,6 @@ use noodles::core::{Position, Region};
 use noodles::bam::r#async::io::{Reader as AsyncReader, Writer as AsyncWriter};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use std::path::PathBuf;
-
-use futures::TryStreamExt;
 use tokio::fs::File;
 
 /// Filters BAM files based on read criteria.

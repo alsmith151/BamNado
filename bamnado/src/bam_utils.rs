@@ -11,7 +11,7 @@ use ahash::{HashMap, HashSet};
 use anyhow::{Context, Result};
 use bio_types::annot::contig::Contig;
 use bio_types::strand::ReqStrand;
-use log::{debug, info};
+use log::{debug};
 
 use bio_types::strand::Strand as BioStrand;
 use noodles::core::{Position, Region};
