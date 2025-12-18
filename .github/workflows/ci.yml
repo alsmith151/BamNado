@@ -103,7 +103,6 @@ jobs:
 
       - name: Build and install bamnado
         run: |
-          maturin check
           maturin develop
 
       - name: Run tests
