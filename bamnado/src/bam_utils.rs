@@ -11,7 +11,7 @@ use ahash::{HashMap, HashSet};
 use anyhow::{Context, Result};
 use bio_types::annot::contig::Contig;
 use bio_types::strand::ReqStrand;
-use log::{debug};
+use log::debug;
 
 use bio_types::strand::Strand as BioStrand;
 use noodles::core::{Position, Region};
@@ -370,7 +370,7 @@ impl BamStats {
         // max_reads_per_bp = max([float(x) / genomeLength for x in mappedList])
         // genomeChunkLength = int(min(5e6, int(2e6 / (max_reads_per_bp * len(bamHandles)))))
         // genomeChunkLength -= genomeChunkLength % tile_size
-    
+
         let stats = &self.chrom_stats;
         let genome_length = stats.values().map(|x| x.length).sum::<u64>();
         let max_reads_per_bp = self.n_mapped as f64 / genome_length as f64;

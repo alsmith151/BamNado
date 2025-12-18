@@ -205,7 +205,7 @@ impl BamPileup {
                 // Each thread creates its own BAM reader.
                 let mut reader = bam::io::indexed_reader::Builder::default()
                     .build_from_path(self.file_path.clone())
-                    .context("Failed to open BAM file")?;   
+                    .context("Failed to open BAM file")?;
                 // Query for reads overlapping the region.
                 let records = reader.query(&header, &region)?;
                 // Create intervals from each read that passes filtering.
@@ -240,7 +240,7 @@ impl BamPileup {
                 let region_end = region_interval
                     .end()
                     .context("Failed to get region end")?
-                    .get(); 
+                    .get();
                 let mut bin_counts: Vec<Iv> = Vec::new();
                 let mut start = region_start;
                 while start < region_end {

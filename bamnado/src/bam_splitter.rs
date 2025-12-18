@@ -96,7 +96,7 @@ impl BamFilterer {
             let mut query = reader.query(&header, &index, &region)?;
             let mut record = bam::Record::default();
 
-            while query.read_record(&mut record).await? != 0  {
+            while query.read_record(&mut record).await? != 0 {
                 let is_valid = self.filter.is_valid(&record, Some(&header))?;
                 if is_valid {
                     writer.write_record(&header, &record).await?;

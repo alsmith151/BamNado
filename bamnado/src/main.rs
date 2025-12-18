@@ -258,8 +258,7 @@ fn create_filter_from_options(
         (Some(blacklist), Some(stats)) => {
             let lapper = bamnado::bam_utils::bed_to_lapper(blacklist.clone())
                 .context("Failed to read blacklisted locations")?;
-            
-            
+
             let lapper = bamnado::bam_utils::convert_lapper_chrom_names_to_ids(lapper, stats)
                 .context("Failed to convert chrom names to chrom ids")?;
 

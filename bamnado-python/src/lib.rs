@@ -7,11 +7,11 @@
 //!
 //! *   `get_signal_for_chromosome`: Calculates coverage signal for a chromosome.
 
+use bamnado::{bam_utils, coverage_analysis, read_filter::BamReadFilter, signal_normalization};
 use ndarray::prelude::*;
 use numpy::{PyArray1, prelude::*};
 use pyo3::exceptions::{PyKeyError, PyRuntimeError};
 use pyo3::prelude::*;
-use bamnado::{bam_utils, coverage_analysis, signal_normalization, read_filter::BamReadFilter};
 
 fn anyhow_to_pyerr(err: anyhow::Error) -> PyErr {
     PyRuntimeError::new_err(err.to_string())
