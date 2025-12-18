@@ -35,10 +35,30 @@ rustc-args = []
 name = "bamnado"
 version = "0.3.2"
 description = 'Python bindings for BamNado'
-authors = [{name = 'asmith', email = 'alastair.smith@ndcls.ox.ac.uk'}]
+authors = [{name = 'Alastair Smith', email = 'alastair.smith@ndcls.ox.ac.uk'}]
+readme = "README.md"
+license = {text = "MIT OR Apache-2.0"}
+keywords = ["bioinformatics", "scATAC-seq", "MCC", "BAM"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Rust",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS :: MacOS X",
+    "Operating System :: Microsoft :: Windows",
+]
+requires-python = ">=3.10"
 dependencies = [
   "numpy >= 2",
-  ]
+]
+
+[project.urls]
+Homepage = "https://github.com/alsmith151/BamNado"
+Repository = "https://github.com/alsmith151/BamNado"
+Documentation = "https://alsmith151.github.io/BamNado/"
 
 [project.optional-dependencies]
 test = ["pytest>=7.0", "pytest-cov>=4.0"]

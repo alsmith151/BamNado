@@ -98,4 +98,9 @@ mod _bamnado {
         let numpy_array = array.into_pyarray(py).unbind();
         Ok(numpy_array)
     }
+
+    #[pyfunction]
+    fn __version__() -> &'static str {
+        env!("CARGO_PKG_VERSION")
+    }
 }

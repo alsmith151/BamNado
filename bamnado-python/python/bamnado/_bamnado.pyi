@@ -19,3 +19,8 @@ def get_signal_for_chromosome(
     Returns:
         np.ndarray: Array representing the signal for the specified chromosome.
     """
+    ...
+
+def __version__() -> str:
+    """Get the version of the bamnado package."""
+    ...
