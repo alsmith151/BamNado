@@ -662,6 +662,13 @@ mod tests {
         )
     }
 
+    fn get_test_data_dir() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("Failed to get workspace root")
+            .join("test/data")
+    }
+
     #[test]
     fn test_bam_pileup_new() {
         let file_path = PathBuf::from("test.bam");
@@ -746,11 +753,7 @@ mod tests {
 
     #[test]
     fn test_bam_to_bigwig_raw_scale() {
-        let test_data_dir = PathBuf::from(file!())
-            .ancestors()
-            .nth(2)
-            .unwrap()
-            .join("test/data");
+        let test_data_dir = get_test_data_dir();
         let temp_dir = TempDir::new().unwrap();
         let bam_file = test_data_dir.join("test.bam");
         let output_path = temp_dir.path().join("test.bw");
@@ -784,11 +787,7 @@ mod tests {
 
     #[test]
     fn test_bam_to_bigwig_cpm_scale() {
-        let test_data_dir = PathBuf::from(file!())
-            .ancestors()
-            .nth(2)
-            .unwrap()
-            .join("test/data");
+        let test_data_dir = get_test_data_dir();
         let temp_dir = TempDir::new().unwrap();
         let bam_file = test_data_dir.join("test.bam");
         let output_path = temp_dir.path().join("test_cpm.bw");
@@ -823,11 +822,7 @@ mod tests {
 
     #[test]
     fn test_bam_to_bigwig_rpkm_scale() {
-        let test_data_dir = PathBuf::from(file!())
-            .ancestors()
-            .nth(2)
-            .unwrap()
-            .join("test/data");
+        let test_data_dir = get_test_data_dir();
         let temp_dir = TempDir::new().unwrap();
         let bam_file = test_data_dir.join("test.bam");
         let output_path = temp_dir.path().join("test_rpkm.bw");
