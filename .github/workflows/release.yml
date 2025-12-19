@@ -75,6 +75,7 @@ jobs:
           profile: minimal
           toolchain: stable
           override: true
+          target: ${{ matrix.target }}
           components: rust-src, rust-std, cargo
 
       - name: Make cargo available in shell
@@ -199,12 +200,9 @@ jobs:
           fetch-depth: 1
 
       - name: Setup Rust toolchain (release job)
-        uses: actions-rs/toolchain@v1
+        uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          profile: minimal
           toolchain: stable
-          override: true
-          components: rust-src, rust-std, cargo
 
       - uses: Swatinem/rust-cache@v2
         with:
