@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Comprehensive documentation (docstrings) for all structs and methods in `bamnado/src/`.
 - New Python interface for BamNado functionality, allowing usage of Rust-optimized tools directly from Python.
+- New `compare-bigwigs` CLI command to compare two BigWig files using `subtraction`, `ratio`, or `log-ratio`.
 
 ### Fixed
 
