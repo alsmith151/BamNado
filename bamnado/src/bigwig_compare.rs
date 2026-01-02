@@ -153,13 +153,12 @@ where
                 values.push(diff.slice(s![start..end]).mean().unwrap_or(0.0)); // Handle empty slices
             }
 
-            let mut df = DataFrame::new(vec![
-                Column::new("chrom".into(), chroms),
-                Column::new("start".into(), starts),
-                Column::new("end".into(), ends),
-                Column::new("score".into(), values),
-            ])?;
-
+            let mut df = df![
+                "chrom" => chroms,
+                "start" => starts,
+                "end" => ends,
+                "score" => values,
+            ]?;
             df.sort_in_place(["chrom", "start"], SortMultipleOptions::default())?;
             Ok(df)
         })
