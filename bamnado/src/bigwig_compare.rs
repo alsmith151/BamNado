@@ -2,16 +2,14 @@
 //! Aimed at comparing coverage BigWig files, e.g., from different samples or conditions.
 
 use crate::bam_utils::progress_bar;
-use anyhow::{Context, Result};
+use anyhow::Result;
 use bigtools::{DEFAULT_BLOCK_SIZE, DEFAULT_ITEMS_PER_SLOT};
 use indicatif::ProgressIterator;
 use itertools::Itertools;
 use log::info;
 use ndarray::prelude::*;
-use noodles::bam::record::data::field::value;
 use polars::prelude::*;
 use rayon::prelude::*;
-use std::collections::HashMap;
 use std::io::Write;
 use std::path::Path;
 use tempfile;
@@ -132,10 +130,11 @@ where
                 })?;
 
             // Perform comparison
+            let pc = pseudocount.unwrap_or(1e-12) as f32;
             let diff = match comparison {
                 Comparison::Subtraction => &arr1 - &arr2,
-                Comparison::Ratio => &arr1 / (&arr2 + pseudocount.unwrap_or(1e-12) as f32),
-                Comparison::LogRatio => (&arr1 / &arr2).mapv(|x| x.ln()),
+                Comparison::Ratio => &arr1 / (&arr2 + pc),
+                Comparison::LogRatio => ((&arr1 + pc) / (&arr2 + pc)).mapv(|x| x.ln()),
             };
 
             // Create a bedgraph style output for this chromosome as a polars DataFrame
@@ -366,6 +365,148 @@ mod tests {
             .map(|i| i.value)
             .unwrap();
         assert!((val1 - 2.0).abs() < 1e-5, "Expected 2.0, got {}", val1);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_compare_bigwigs_identical_inputs() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let bw1_path = dir.path().join("test1.bw");
+        let bw2_path = dir.path().join("test2.bw");
+        let out_sub = dir.path().join("out_sub.bw");
+        let out_ratio = dir.path().join("out_ratio.bw");
+        let out_logratio = dir.path().join("out_logratio.bw");
+
+        let mut chrom_map = HashMap::new();
+        chrom_map.insert("chr1".to_string(), 1000);
+
+        let values = vec![
+            ("chr1".to_string(), 0, 100, 10.0),
+            ("chr1".to_string(), 100, 200, 20.0),
+        ];
+        create_dummy_bigwig(&bw1_path, chrom_map.clone(), values.clone())?;
+        create_dummy_bigwig(&bw2_path, chrom_map.clone(), values)?;
+
+        compare_bigwigs(
+            &bw1_path,
+            &bw2_path,
+            &out_sub,
+            Comparison::Subtraction,
+            10,
+            None,
+            None,
+        )?;
+        compare_bigwigs(
+            &bw1_path,
+            &bw2_path,
+            &out_ratio,
+            Comparison::Ratio,
+            10,
+            None,
+            None,
+        )?;
+        compare_bigwigs(
+            &bw1_path,
+            &bw2_path,
+            &out_logratio,
+            Comparison::LogRatio,
+            10,
+            None,
+            None,
+        )?;
+
+        // Subtraction should be ~0 everywhere.
+        let mut reader = BigWigRead::open_file(out_sub.to_str().unwrap())?;
+        let intervals: Vec<_> = reader
+            .get_interval("chr1", 0, 200)?
+            .collect::<Result<Vec<_>, _>>()?;
+        for iv in &intervals {
+            assert!(iv.value.abs() < 1e-5, "Expected ~0, got {}", iv.value);
+        }
+
+        // Ratio should be ~1 everywhere.
+        let mut reader = BigWigRead::open_file(out_ratio.to_str().unwrap())?;
+        let intervals: Vec<_> = reader
+            .get_interval("chr1", 0, 200)?
+            .collect::<Result<Vec<_>, _>>()?;
+        for iv in &intervals {
+            assert!((iv.value - 1.0).abs() < 1e-5, "Expected ~1, got {}", iv.value);
+        }
+
+        // LogRatio should be ~0 everywhere.
+        let mut reader = BigWigRead::open_file(out_logratio.to_str().unwrap())?;
+        let intervals: Vec<_> = reader
+            .get_interval("chr1", 0, 200)?
+            .collect::<Result<Vec<_>, _>>()?;
+        for iv in &intervals {
+            assert!(iv.value.abs() < 1e-5, "Expected ~0, got {}", iv.value);
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_compare_bigwigs_ratio_and_logratio_are_finite_with_zeros() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let bw1_path = dir.path().join("test1.bw");
+        let bw2_path = dir.path().join("test2.bw");
+        let out_ratio = dir.path().join("out_ratio.bw");
+        let out_logratio = dir.path().join("out_logratio.bw");
+
+        let mut chrom_map = HashMap::new();
+        chrom_map.insert("chr1".to_string(), 200);
+
+        // Denominator has zeros; we rely on pseudocount to avoid Inf/NaN.
+        create_dummy_bigwig(
+            &bw1_path,
+            chrom_map.clone(),
+            vec![("chr1".to_string(), 0, 100, 10.0)],
+        )?;
+        create_dummy_bigwig(
+            &bw2_path,
+            chrom_map.clone(),
+            vec![("chr1".to_string(), 0, 100, 0.0)],
+        )?;
+
+        compare_bigwigs(
+            &bw1_path,
+            &bw2_path,
+            &out_ratio,
+            Comparison::Ratio,
+            10,
+            None,
+            Some(1e-3),
+        )?;
+        compare_bigwigs(
+            &bw1_path,
+            &bw2_path,
+            &out_logratio,
+            Comparison::LogRatio,
+            10,
+            None,
+            Some(1e-3),
+        )?;
+
+        let mut reader = BigWigRead::open_file(out_ratio.to_str().unwrap())?;
+        let intervals: Vec<_> = reader
+            .get_interval("chr1", 0, 100)?
+            .collect::<Result<Vec<_>, _>>()?;
+        for iv in &intervals {
+            assert!(iv.value.is_finite(), "Ratio should be finite, got {}", iv.value);
+        }
+
+        let mut reader = BigWigRead::open_file(out_logratio.to_str().unwrap())?;
+        let intervals: Vec<_> = reader
+            .get_interval("chr1", 0, 100)?
+            .collect::<Result<Vec<_>, _>>()?;
+        for iv in &intervals {
+            assert!(
+                iv.value.is_finite(),
+                "LogRatio should be finite, got {}",
+                iv.value
+            );
+        }
 
         Ok(())
     }
