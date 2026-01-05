@@ -29,6 +29,7 @@
 pub mod bam_modifier;
 pub mod bam_splitter;
 pub mod bam_utils;
+pub mod bigwig_compare;
 pub mod coverage_analysis;
 pub mod genomic_intervals;
 pub mod read_filter;

@@ -217,6 +217,37 @@ enum Commands {
         #[arg(long, action = clap::ArgAction::SetTrue)]
         tn5_shift: bool,
     },
+
+    /// Compare two BigWig files
+    #[command(name = "compare-bigwigs")]
+    CompareBigWigs {
+        /// Path to the first BigWig file
+        #[arg(long)]
+        bw1: PathBuf,
+
+        /// Path to the second BigWig file
+        #[arg(long)]
+        bw2: PathBuf,
+
+        /// Output BigWig file path
+        #[arg(short, long)]
+        output: PathBuf,
+
+        /// Comparison method
+        #[arg(short, long, value_enum)]
+        comparison: bamnado::bigwig_compare::Comparison,
+
+        /// Bin size for comparison
+        #[arg(short = 's', long, default_value = "50")]
+        bin_size: u32,
+
+        /// Chunk size for processing
+        #[arg(long)]
+        chunk_size: Option<usize>,
+
+        #[arg(long)]
+        pseudocount: Option<f64>,
+    },
 }
 
 // Helper functions to reduce code duplication
@@ -600,6 +631,32 @@ fn main() -> Result<()> {
                 .context("Failed to modify BAM file")?;
 
             info!("Successfully modified BAM file");
+        }
+
+        Commands::CompareBigWigs {
+            bw1,
+            bw2,
+            output,
+            comparison,
+            bin_size,
+            chunk_size,
+            pseudocount,
+        } => {
+            bamnado::bigwig_compare::compare_bigwigs(
+                bw1,
+                bw2,
+                output,
+                comparison.clone(),
+                *bin_size,
+                *chunk_size,
+                *pseudocount,
+            )
+            .context("Failed to compare BigWig files")?;
+
+            info!(
+                "Successfully compared BigWig files and wrote output to {}",
+                output.display()
+            );
         }
     }
 

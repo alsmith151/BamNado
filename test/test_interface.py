@@ -11,15 +11,15 @@ def bam_file():
 def test_get_signal_for_chromosome(bam_file):
     """Test getting signal for a chromosome."""
     assert os.path.exists(bam_file), f"Test file not found: {bam_file}"
-    
+
     # Parameters
     # Note: Adjust chromosome name based on what is actually in test.bam
-    chromosome = "chr9" 
+    chromosome = "chr9"
     bin_size = 50
     scale_factor = 1.0
     use_fragment = False
     ignore_scaffold = True
-    
+
     try:
         signal = get_signal_for_chromosome(
             bam_file,
@@ -29,11 +29,11 @@ def test_get_signal_for_chromosome(bam_file):
             use_fragment,
             ignore_scaffold
         )
-        
+
         assert isinstance(signal, np.ndarray)
         assert signal.ndim == 1
         assert signal.dtype == np.float32
-        
+
     except KeyError as e:
         pytest.fail(f"Chromosome {chromosome} not found in {bam_file}: {e}")
 

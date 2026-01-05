@@ -87,7 +87,7 @@ The easiest way to get started is to download a pre-compiled binary from our [re
    ./bamnado --version
    ```
 
-   You should see output like: `bamnado 0.3.2`
+   You should see output like: `bamnado 0.4.0`
 
 5. **Install system-wide** (optional but recommended)
 
@@ -266,6 +266,7 @@ BamNado provides several commands for different BAM file operations:
 - `split-exogenous` - Split a BAM file into endogenous and exogenous reads
 - `split` - Split a BAM file based on a set of defined filters
 - `modify` - Modify BAM files with various transformations
+- `compare-bigwigs` - Compare two BigWig files and write the result to a new BigWig file
 
 For detailed help on any command, use:
 
@@ -386,6 +387,31 @@ bamnado modify \
 
 The `modify` command supports various filtering options and transformations like Tn5 shifting for ATAC-seq data processing.
 
+#### Compare BigWig Files
+
+To compare two BigWig files and write the result to a new BigWig file:
+
+```bash
+bamnado compare-bigwigs \
+   --bw1 sample1.bw \
+   --bw2 sample2.bw \
+   --comparison subtraction \
+   -s 50 \
+   -o output.bw
+```
+
+Supported comparison methods:
+
+- `subtraction`: $bw1 - bw2$
+- `ratio`: $bw1 / (bw2 + pseudocount)$
+- `log-ratio`: $\ln\left((bw1 + pseudocount) / (bw2 + pseudocount)\right)$
+
+Common options:
+
+- `-s, --bin-size`: Bin size in base pairs used to compute the mean score per bin (default: 50)
+- `--chunk-size`: Chunk size in base pairs for streaming reads from BigWigs (tune for IO/memory)
+- `--pseudocount`: Pseudocount used for `ratio` / `log-ratio` to avoid division by zero
+
 ## Help
 
 For more details on available commands and options, run:
@@ -493,13 +519,11 @@ pre-commit uninstall             # Remove hooks
 
 ## Release Information
 
-### Version 0.3.1 (2025-07-09)
+### Version 0.4.0
 
-- Initial public release with comprehensive BAM file manipulation tools
-- Support for single cell and MCC (Multi-modal Cellular Characterization) use cases
-- Cross-platform binary builds available for Linux, macOS, and Windows
-- High-performance Rust implementation
-- Complete CI/CD pipeline with automated testing and releases
+- High-performance BAM coverage and manipulation tools
+- Python bindings (via `maturin`) for selected functionality
+- BigWig comparison via `compare-bigwigs` (subtraction/ratio/log-ratio)
 
 For detailed changelog information, see [CHANGELOG.md](CHANGELOG.md).
 
