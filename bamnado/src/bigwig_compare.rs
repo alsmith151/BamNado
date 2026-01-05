@@ -1,4 +1,4 @@
-//!  BigWig file comparison utilities.   
+//!  BigWig file comparison utilities.
 //! Aimed at comparing coverage BigWig files, e.g., from different samples or conditions.
 
 use crate::bam_utils::progress_bar;
@@ -42,19 +42,19 @@ fn read_bp_range_into_array_chunk(
     for interval_res in values {
         let interval = interval_res?;
         // clip interval to requested region
-        let s = std::cmp::max(interval.start as u32, start) as usize;
-        let e = std::cmp::min(interval.end as u32, end) as usize;
-        if s >= e { continue; }
+        let s = std::cmp::max(interval.start, start) as usize;
+        let e = std::cmp::min(interval.end, end) as usize;
+        if s >= e {
+            continue;
+        }
         let base_offset = start as usize;
         // iterate only inside clipped interval
         for pos in s..e {
-            array_chunk[pos - base_offset] = interval.value as f32;
+            array_chunk[pos - base_offset] = interval.value;
         }
     }
     Ok(())
 }
-
-
 
 /// Compare two BigWig files and report differences in as a new BigWig file.
 /// # Arguments
@@ -119,7 +119,7 @@ where
                         a1_chunk,
                     )?;
                     read_bp_range_into_array_chunk(
-                        bw2_path.as_ref(),
+                        bw2_path,
                         &chromosome.name,
                         start as u32,
                         end as u32,
@@ -348,7 +348,15 @@ mod tests {
         let values2 = vec![("chr1".to_string(), 0, 100, 5.0)];
         create_dummy_bigwig(&bw2_path, chrom_map.clone(), values2)?;
 
-        compare_bigwigs(&bw1_path, &bw2_path, &out_path, Comparison::Ratio, 10, None, None)?;
+        compare_bigwigs(
+            &bw1_path,
+            &bw2_path,
+            &out_path,
+            Comparison::Ratio,
+            10,
+            None,
+            None,
+        )?;
 
         assert!(out_path.exists());
 
@@ -430,7 +438,11 @@ mod tests {
             .get_interval("chr1", 0, 200)?
             .collect::<Result<Vec<_>, _>>()?;
         for iv in &intervals {
-            assert!((iv.value - 1.0).abs() < 1e-5, "Expected ~1, got {}", iv.value);
+            assert!(
+                (iv.value - 1.0).abs() < 1e-5,
+                "Expected ~1, got {}",
+                iv.value
+            );
         }
 
         // LogRatio should be ~0 everywhere.
@@ -492,7 +504,11 @@ mod tests {
             .get_interval("chr1", 0, 100)?
             .collect::<Result<Vec<_>, _>>()?;
         for iv in &intervals {
-            assert!(iv.value.is_finite(), "Ratio should be finite, got {}", iv.value);
+            assert!(
+                iv.value.is_finite(),
+                "Ratio should be finite, got {}",
+                iv.value
+            );
         }
 
         let mut reader = BigWigRead::open_file(out_logratio.to_str().unwrap())?;

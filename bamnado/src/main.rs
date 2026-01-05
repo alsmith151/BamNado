@@ -653,7 +653,10 @@ fn main() -> Result<()> {
             )
             .context("Failed to compare BigWig files")?;
 
-            info!("Successfully compared BigWig files and wrote output to {}", output.display());
+            info!(
+                "Successfully compared BigWig files and wrote output to {}",
+                output.display()
+            );
         }
     }
 
