@@ -24,4 +24,5 @@ __pycache__/
 # Pre-commit
 .pre-commit-cache/
 test.ipynb
-
+test_compare_invert.bw
+test_compare.bw
