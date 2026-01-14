@@ -21,6 +21,15 @@ pub enum Comparison {
     LogRatio,
 }
 
+#[derive(Debug, Clone, clap::ValueEnum)]
+pub enum AggregationMode {
+    Sum,
+    Mean,
+    Median,
+    Max,
+    Min,
+}
+
 /// Read a range from a BigWig file into a provided array chunk.
 /// # Arguments
 /// * `bw` - Path to the BigWig file.
@@ -217,7 +226,222 @@ where
     Ok(())
 }
 
+/// Aggregate multiple BigWig files into a single output BigWig.
+/// # Arguments
+/// * `bw_paths` - Vector of paths to BigWig files to aggregate.
+/// * `output_path` - Path to the output BigWig file.
+/// * `aggregation_mode` - The aggregation method (Sum, Mean, Median, Max, Min).
+/// * `bin_size` - Size of bins for binning the output signal.
+/// * `chunksize` - Optional chunk size for processing (in base pairs).
+/// * `pseudocount` - Optional pseudocount value for aggregation (added to all values).
+/// # Returns
+/// A Result indicating success or failure.
+pub fn aggregate_bigwigs<P>(
+    bw_paths: &[P],
+    output_path: &Path,
+    aggregation_mode: AggregationMode,
+    bin_size: u32,
+    chunksize: Option<usize>,
+    pseudocount: Option<f64>,
+) -> Result<()>
+where
+    P: AsRef<Path> + std::fmt::Debug + Send + Sync,
+{
+    if bw_paths.is_empty() {
+        return Err(anyhow::anyhow!("At least one BigWig file is required"));
+    }
+
+    // Get chromosome information from the first file
+    let chrom_info = bigtools::BigWigRead::open_file(bw_paths[0].as_ref())?
+        .chroms()
+        .to_owned()
+        .into_iter()
+        .sorted_by(|a, b| a.name.cmp(&b.name))
+        .collect::<Vec<_>>();
+
+    let chunk_size = chunksize.unwrap_or(1_000_000); // Default to 1Mb chunks if not specified
+
+    let dfs: Vec<DataFrame> = chrom_info
+        .iter()
+        .progress_with(progress_bar(
+            chrom_info.len() as u64,
+            "Processing chromosomes".to_string(),
+        ))
+        .map(|chromosome| {
+            // Allocate arrays for all input BigWigs at bp resolution
+            let mut arrays: Vec<Array1<f32>> = (0..bw_paths.len())
+                .map(|_| Array1::<f32>::zeros(chromosome.length as usize))
+                .collect();
+
+            // Fill arrays in parallel chunks
+            arrays
+                .iter_mut()
+                .zip(bw_paths.iter())
+                .enumerate()
+                .try_for_each(|(_bw_idx, (arr, bw_path))| {
+                    arr.as_slice_mut()
+                        .expect("contiguous")
+                        .par_chunks_mut(chunk_size)
+                        .enumerate()
+                        .try_for_each(|(chunk_idx, chunk)| -> Result<()> {
+                            let start = chunk_idx * chunk_size;
+                            let end = std::cmp::min(start + chunk_size, chromosome.length as usize);
+                            read_bp_range_into_array_chunk(
+                                bw_path.as_ref(),
+                                &chromosome.name,
+                                start as u32,
+                                end as u32,
+                                chunk,
+                            )?;
+                            Ok(())
+                        })?;
+                    Ok::<(), anyhow::Error>(())
+                })?;
+
+            // Perform aggregation
+            let pc = pseudocount.unwrap_or(0.0) as f32;
+
+            // Add pseudocount to all arrays
+            let arrays: Vec<Array1<f32>> = arrays.into_iter().map(|arr| &arr + pc).collect();
+
+            let aggregated = match aggregation_mode {
+                AggregationMode::Sum => arrays
+                    .iter()
+                    .skip(1)
+                    .fold(arrays[0].clone(), |acc, arr| &acc + arr),
+                AggregationMode::Mean => {
+                    let sum = arrays
+                        .iter()
+                        .skip(1)
+                        .fold(arrays[0].clone(), |acc, arr| &acc + arr);
+                    sum / arrays.len() as f32
+                }
+                AggregationMode::Max => {
+                    arrays.iter().skip(1).fold(arrays[0].clone(), |acc, arr| {
+                        acc.iter().zip(arr.iter()).map(|(a, b)| a.max(*b)).collect()
+                    })
+                }
+                AggregationMode::Min => {
+                    arrays.iter().skip(1).fold(arrays[0].clone(), |acc, arr| {
+                        acc.iter().zip(arr.iter()).map(|(a, b)| a.min(*b)).collect()
+                    })
+                }
+                AggregationMode::Median => {
+                    // Median will be computed per bin after binning
+                    // For now, create a placeholder that we'll handle specially
+                    arrays[0].clone()
+                }
+            };
+
+            // Binning
+            let n_bins = (chromosome.length as f32 / bin_size as f32).ceil() as usize;
+            let mut chroms = Vec::with_capacity(n_bins);
+            let mut starts = Vec::with_capacity(n_bins);
+            let mut ends = Vec::with_capacity(n_bins);
+            let mut values: Vec<f32> = Vec::with_capacity(n_bins);
+
+            for bin_idx in 0..n_bins {
+                let start = bin_idx * bin_size as usize;
+                let end = std::cmp::min(start + bin_size as usize, chromosome.length as usize);
+                chroms.push(chromosome.name.clone());
+                starts.push(start as u32);
+                ends.push(end as u32);
+
+                let bin_value = match aggregation_mode {
+                    AggregationMode::Median => {
+                        // For median, collect values from all arrays in this bin
+                        let mut bin_values: Vec<f32> = Vec::new();
+                        for arr in &arrays {
+                            let slice = arr.slice(s![start..end]);
+                            bin_values.extend(slice.to_vec());
+                        }
+                        if bin_values.is_empty() {
+                            0.0
+                        } else {
+                            bin_values.sort_by(|a, b| {
+                                a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
+                            });
+                            let mid = bin_values.len() / 2;
+                            if bin_values.len().is_multiple_of(2) {
+                                (bin_values[mid - 1] + bin_values[mid]) / 2.0
+                            } else {
+                                bin_values[mid]
+                            }
+                        }
+                    }
+                    _ => aggregated.slice(s![start..end]).mean().unwrap_or(0.0),
+                };
+
+                values.push(bin_value);
+            }
+
+            let mut df = df![
+                "chrom" => chroms,
+                "start" => starts,
+                "end" => ends,
+                "score" => values,
+            ]?;
+            df.sort_in_place(["chrom", "start"], SortMultipleOptions::default())?;
+            Ok(df)
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    // Concatenate all DataFrames
+    if dfs.is_empty() {
+        return Ok(());
+    }
+    let mut final_df = dfs[0].clone();
+    for df in dfs.iter().skip(1) {
+        final_df.vstack_mut(df)?;
+    }
+
+    // Write chrom sizes to temp file
+    let chromsizes_file = tempfile::NamedTempFile::new()?;
+    {
+        let mut writer = std::io::BufWriter::new(&chromsizes_file);
+        for chrom in &chrom_info {
+            writeln!(writer, "{}\t{}", chrom.name, chrom.length)?;
+        }
+    }
+
+    // Write bedgraph to temp file
+    info!("Writing temporary bedgraph file");
+    let bedgraph_file = tempfile::NamedTempFile::new()?;
+    let bedgraph_path = bedgraph_file.path();
+
+    // Use CsvWriter to write tab-separated values
+    CsvWriter::new(&bedgraph_file)
+        .include_header(false)
+        .with_separator(b'\t')
+        .finish(&mut final_df)?;
+
+    // Convert to BigWig
+    let args = bigtools::utils::cli::bedgraphtobigwig::BedGraphToBigWigArgs {
+        bedgraph: bedgraph_path.to_string_lossy().to_string(),
+        chromsizes: chromsizes_file.path().to_string_lossy().to_string(),
+        output: output_path.to_string_lossy().to_string(),
+        parallel: "auto".to_string(),
+        single_pass: true,
+        write_args: bigtools::utils::cli::BBIWriteArgs {
+            nthreads: 6,
+            nzooms: 10,
+            uncompressed: false,
+            sorted: "all".to_string(),
+            zooms: None,
+            block_size: DEFAULT_BLOCK_SIZE,
+            items_per_slot: DEFAULT_ITEMS_PER_SLOT,
+            inmemory: false,
+        },
+    };
+    info!("Writing output BigWig to {:?}", output_path);
+    bigtools::utils::cli::bedgraphtobigwig::bedgraphtobigwig(args)
+        .map_err(|e| anyhow::anyhow!("Error converting bedgraph to bigwig: {}", e))?;
+
+    Ok(())
+}
+
 #[cfg(test)]
+
 mod tests {
     use super::*;
     use bigtools::BigWigRead;

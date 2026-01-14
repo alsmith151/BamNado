@@ -299,7 +299,8 @@ BamNado provides several commands for different BAM file operations:
 - `split-exogenous` - Split a BAM file into endogenous and exogenous reads
 - `split` - Split a BAM file based on a set of defined filters
 - `modify` - Modify BAM files with various transformations
-- `compare-bigwigs` - Compare two BigWig files and write the result to a new BigWig file
+- `bigwig-compare` - Compare two BigWig files and write the result to a new BigWig file
+- `bigwig-aggregate` - Aggregate multiple BigWig files into one using sum, mean, median, max, or min
 
 For detailed help on any command, use:
 
@@ -425,7 +426,7 @@ The `modify` command supports various filtering options and transformations like
 To compare two BigWig files and write the result to a new BigWig file:
 
 ```bash
-bamnado compare-bigwigs \
+bamnado bigwig-compare \
    --bw1 sample1.bw \
    --bw2 sample2.bw \
    --comparison subtraction \
@@ -444,6 +445,57 @@ Common options:
 - `-s, --bin-size`: Bin size in base pairs used to compute the mean score per bin (default: 50)
 - `--chunk-size`: Chunk size in base pairs for streaming reads from BigWigs (tune for IO/memory)
 - `--pseudocount`: Pseudocount used for `ratio` / `log-ratio` to avoid division by zero
+
+#### Aggregate BigWig Files
+
+To aggregate multiple BigWig files into a single output file:
+
+```bash
+bamnado bigwig-aggregate \
+   --bigwigs sample1.bw sample2.bw sample3.bw \
+   --method mean \
+   -s 50 \
+   -o aggregated.bw
+```
+
+Supported aggregation methods:
+
+- `sum`: Sum of all values across all BigWigs at each position
+- `mean`: Mean of all values across all BigWigs at each position
+- `median`: Median of all values across all BigWigs at each position (computed post-binning)
+- `max`: Maximum value across all BigWigs at each position
+- `min`: Minimum value across all BigWigs at each position
+
+Common options:
+
+- `--bigwigs`: Space-separated list of BigWig files to aggregate (at least one required)
+- `-s, --bin-size`: Bin size in base pairs used to compute aggregated score per bin (default: 50)
+- `--chunk-size`: Chunk size in base pairs for streaming reads from BigWigs (tune for IO/memory)
+- `--pseudocount`: Pseudocount value to add to all values before aggregation (useful for sum/mean/median to avoid zeros)
+
+Examples:
+
+```bash
+# Sum coverage across 3 samples
+bamnado bigwig-aggregate \
+   --bigwigs sample1.bw sample2.bw sample3.bw \
+   --method sum \
+   -o total_coverage.bw
+
+# Calculate mean coverage with pseudocount
+bamnado bigwig-aggregate \
+   --bigwigs replicate1.bw replicate2.bw replicate3.bw \
+   --method mean \
+   --pseudocount 1e-3 \
+   -o mean_coverage.bw
+
+# Calculate median coverage across many samples
+bamnado bigwig-aggregate \
+   --bigwigs $(ls *.bw) \
+   --method median \
+   -s 100 \
+   -o median_coverage.bw
+```
 
 ## Help
 
@@ -556,7 +608,8 @@ pre-commit uninstall             # Remove hooks
 
 - High-performance BAM coverage and manipulation tools
 - Python bindings (via `maturin`) for selected functionality
-- BigWig comparison via `compare-bigwigs` (subtraction/ratio/log-ratio)
+- BigWig comparison via `bigwig-compare` (subtraction/ratio/log-ratio)
+- BigWig aggregation via `bigwig-aggregate` (sum/mean/median/max/min)
 
 For detailed changelog information, see [CHANGELOG.md](CHANGELOG.md).
 
