@@ -248,6 +248,34 @@ enum Commands {
         #[arg(long)]
         pseudocount: Option<f64>,
     },
+
+    /// Aggregate multiple BigWig files into one
+    #[command(name = "aggregate-bigwigs")]
+    AggregateBigWigs {
+        /// Paths to the BigWig files to aggregate
+        #[arg(long)]
+        bigwigs: Vec<PathBuf>,
+
+        /// Output BigWig file path
+        #[arg(short, long)]
+        output: PathBuf,
+
+        /// Aggregation method
+        #[arg(short, long, value_enum)]
+        method: bamnado::bigwig_compare::AggregationMode,
+
+        /// Bin size for aggregation
+        #[arg(short = 's', long, default_value = "50")]
+        bin_size: u32,
+
+        /// Chunk size for processing
+        #[arg(long)]
+        chunk_size: Option<usize>,
+
+        /// Pseudocount value to add to all values
+        #[arg(long)]
+        pseudocount: Option<f64>,
+    },
 }
 
 // Helper functions to reduce code duplication
@@ -655,6 +683,35 @@ fn main() -> Result<()> {
 
             info!(
                 "Successfully compared BigWig files and wrote output to {}",
+                output.display()
+            );
+        }
+
+        Commands::AggregateBigWigs {
+            bigwigs,
+            output,
+            method,
+            bin_size,
+            chunk_size,
+            pseudocount,
+        } => {
+            if bigwigs.is_empty() {
+                return Err(anyhow::anyhow!("At least one BigWig file must be provided"));
+            }
+
+            bamnado::bigwig_compare::aggregate_bigwigs(
+                bigwigs,
+                output,
+                method.clone(),
+                *bin_size,
+                *chunk_size,
+                *pseudocount,
+            )
+            .context("Failed to aggregate BigWig files")?;
+
+            info!(
+                "Successfully aggregated {} BigWig files and wrote output to {}",
+                bigwigs.len(),
                 output.display()
             );
         }
