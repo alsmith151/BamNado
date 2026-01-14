@@ -44,6 +44,39 @@ print(f"Mean coverage: {np.mean(signal)}")
 
 BamNado can be installed in several ways. Choose the method that best fits your needs:
 
+### Method 0: Docker Container (Easiest for Linux/macOS)
+
+If you have Docker installed, you can run BamNado directly from a container:
+
+```bash
+# Pull the latest image
+docker pull ghcr.io/alsmith151/bamnado:latest
+
+# Run any bamnado command
+docker run --rm -v /path/to/data:/data ghcr.io/alsmith151/bamnado:latest coverage --help
+```
+
+**Multi-platform support**: Container images are available for both `linux/amd64` and `linux/arm64`. macOS users with Apple Silicon can run the ARM64 image natively via Docker Desktop.
+
+**Example: Calculate coverage from a BAM file**
+
+```bash
+docker run --rm -v /path/to/data:/data ghcr.io/alsmith151/bamnado:latest \
+  coverage \
+  --bam /data/input.bam \
+  --output /data/output.bw
+```
+
+**Using specific version tags**
+
+```bash
+# Use a specific release version
+docker pull ghcr.io/alsmith151/bamnado:v0.4.0
+
+# Run with version tag
+docker run --rm -v /path/to/data:/data ghcr.io/alsmith151/bamnado:v0.4.0 coverage --help
+```
+
 ### Method 1: Pre-built Binaries (Recommended)
 
 The easiest way to get started is to download a pre-compiled binary from our [releases page](https://github.com/alsmith151/BamNado/releases).
@@ -147,7 +180,7 @@ The easiest way to get started is to download a pre-compiled binary from our [re
 - Click "More info" → "Run anyway"
 - Or add an exception in Windows Defender
 
-### Method 2: Install via Cargo
+### Method 3: Install via Cargo
 
 If you have Rust and Cargo installed, you can install BamNado directly from crates.io:
 
@@ -166,7 +199,7 @@ cargo install bamnado
 - Automatically handles dependencies
 - Works on any platform supported by Rust
 
-### Method 3: Build from Source
+### Method 4: Build from Source
 
 For the latest development version or if pre-built binaries don't work on your system:
 
