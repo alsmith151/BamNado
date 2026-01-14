@@ -219,7 +219,7 @@ enum Commands {
     },
 
     /// Compare two BigWig files
-    #[command(name = "compare-bigwigs")]
+    #[command(name = "bigwig-compare")]
     CompareBigWigs {
         /// Path to the first BigWig file
         #[arg(long)]
@@ -250,10 +250,10 @@ enum Commands {
     },
 
     /// Aggregate multiple BigWig files into one
-    #[command(name = "aggregate-bigwigs")]
+    #[command(name = "bigwig-aggregate")]
     AggregateBigWigs {
         /// Paths to the BigWig files to aggregate
-        #[arg(long)]
+        #[arg(long, num_args = 1..)]
         bigwigs: Vec<PathBuf>,
 
         /// Output BigWig file path

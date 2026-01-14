@@ -266,8 +266,8 @@ BamNado provides several commands for different BAM file operations:
 - `split-exogenous` - Split a BAM file into endogenous and exogenous reads
 - `split` - Split a BAM file based on a set of defined filters
 - `modify` - Modify BAM files with various transformations
-- `compare-bigwigs` - Compare two BigWig files and write the result to a new BigWig file
-- `aggregate-bigwigs` - Aggregate multiple BigWig files into one using sum, mean, median, max, or min
+- `bigwig-compare` - Compare two BigWig files and write the result to a new BigWig file
+- `bigwig-aggregate` - Aggregate multiple BigWig files into one using sum, mean, median, max, or min
 
 For detailed help on any command, use:
 
@@ -393,7 +393,7 @@ The `modify` command supports various filtering options and transformations like
 To compare two BigWig files and write the result to a new BigWig file:
 
 ```bash
-bamnado compare-bigwigs \
+bamnado bigwig-compare \
    --bw1 sample1.bw \
    --bw2 sample2.bw \
    --comparison subtraction \
@@ -418,7 +418,7 @@ Common options:
 To aggregate multiple BigWig files into a single output file:
 
 ```bash
-bamnado aggregate-bigwigs \
+bamnado bigwig-aggregate \
    --bigwigs sample1.bw sample2.bw sample3.bw \
    --method mean \
    -s 50 \
@@ -444,20 +444,20 @@ Examples:
 
 ```bash
 # Sum coverage across 3 samples
-bamnado aggregate-bigwigs \
+bamnado bigwig-aggregate \
    --bigwigs sample1.bw sample2.bw sample3.bw \
    --method sum \
    -o total_coverage.bw
 
 # Calculate mean coverage with pseudocount
-bamnado aggregate-bigwigs \
+bamnado bigwig-aggregate \
    --bigwigs replicate1.bw replicate2.bw replicate3.bw \
    --method mean \
    --pseudocount 1e-3 \
    -o mean_coverage.bw
 
 # Calculate median coverage across many samples
-bamnado aggregate-bigwigs \
+bamnado bigwig-aggregate \
    --bigwigs $(ls *.bw) \
    --method median \
    -s 100 \
@@ -575,8 +575,8 @@ pre-commit uninstall             # Remove hooks
 
 - High-performance BAM coverage and manipulation tools
 - Python bindings (via `maturin`) for selected functionality
-- BigWig comparison via `compare-bigwigs` (subtraction/ratio/log-ratio)
-- BigWig aggregation via `aggregate-bigwigs` (sum/mean/median/max/min)
+- BigWig comparison via `bigwig-compare` (subtraction/ratio/log-ratio)
+- BigWig aggregation via `bigwig-aggregate` (sum/mean/median/max/min)
 
 For detailed changelog information, see [CHANGELOG.md](CHANGELOG.md).
 
