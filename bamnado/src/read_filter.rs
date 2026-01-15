@@ -428,12 +428,16 @@ impl BamReadFilter {
         }
 
         // Filter by tag.
-        if let (Some(filter_tag), Some(filter_tag_value)) = (&self.filter_tag, &self.filter_tag_value) {
+        if let (Some(filter_tag), Some(filter_tag_value)) =
+            (&self.filter_tag, &self.filter_tag_value)
+        {
             if filter_tag.len() != 2 {
-                self.stats.n_failed_tag_filter.fetch_add(1, Ordering::Relaxed);
+                self.stats
+                    .n_failed_tag_filter
+                    .fetch_add(1, Ordering::Relaxed);
                 return Ok(false);
             }
-            
+
             let tag_bytes = filter_tag.as_bytes();
             let tag = Tag::new(tag_bytes[0], tag_bytes[1]);
             let data = alignment.data();
@@ -442,12 +446,16 @@ impl BamReadFilter {
             match tag_value {
                 Some(Ok(Value::String(value))) => {
                     if value != filter_tag_value {
-                        self.stats.n_failed_tag_filter.fetch_add(1, Ordering::Relaxed);
+                        self.stats
+                            .n_failed_tag_filter
+                            .fetch_add(1, Ordering::Relaxed);
                         return Ok(false);
                     }
                 }
                 _ => {
-                    self.stats.n_failed_tag_filter.fetch_add(1, Ordering::Relaxed);
+                    self.stats
+                        .n_failed_tag_filter
+                        .fetch_add(1, Ordering::Relaxed);
                     return Ok(false);
                 }
             }
