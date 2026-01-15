@@ -42,6 +42,8 @@ pub struct BamReadFilterStats {
     n_not_in_read_group: AtomicU64,
     // Number of reads filtered by incorrect strand
     n_incorrect_strand: AtomicU64,
+    // Number of reads filtered by tag
+    n_failed_tag_filter: AtomicU64,
 }
 
 impl Default for BamReadFilterStats {
@@ -62,6 +64,7 @@ impl BamReadFilterStats {
             n_failed_barcode: AtomicU64::new(0),
             n_not_in_read_group: AtomicU64::new(0),
             n_incorrect_strand: AtomicU64::new(0),
+            n_failed_tag_filter: AtomicU64::new(0),
         }
     }
 
@@ -76,6 +79,7 @@ impl BamReadFilterStats {
             n_failed_barcode: self.n_failed_barcode.load(Ordering::Relaxed),
             n_not_in_read_group: self.n_not_in_read_group.load(Ordering::Relaxed),
             n_incorrect_strand: self.n_incorrect_strand.load(Ordering::Relaxed),
+            n_failed_tag_filter: self.n_failed_tag_filter.load(Ordering::Relaxed),
         }
     }
 }
@@ -91,6 +95,7 @@ pub struct BamReadFilterStatsSnapshot {
     n_failed_barcode: u64,
     n_not_in_read_group: u64,
     n_incorrect_strand: u64,
+    n_failed_tag_filter: u64,
 }
 
 impl Display for BamReadFilterStatsSnapshot {
@@ -104,6 +109,7 @@ impl Display for BamReadFilterStatsSnapshot {
         writeln!(f, "Failed barcode: {}", self.n_failed_barcode)?;
         writeln!(f, "Not in read group: {}", self.n_not_in_read_group)?;
         writeln!(f, "Incorrect strand: {}", self.n_incorrect_strand)?;
+        writeln!(f, "Failed tag filter: {}", self.n_failed_tag_filter)?;
         writeln!(
             f,
             "Filtered reads: {}",
@@ -114,6 +120,7 @@ impl Display for BamReadFilterStatsSnapshot {
                 + self.n_failed_barcode
                 + self.n_not_in_read_group
                 + self.n_incorrect_strand
+                + self.n_failed_tag_filter
         )
     }
 }
@@ -128,7 +135,8 @@ impl BamReadFilterStatsSnapshot {
                 + self.n_failed_blacklist
                 + self.n_failed_barcode
                 + self.n_not_in_read_group
-                + self.n_incorrect_strand)
+                + self.n_incorrect_strand
+                + self.n_failed_tag_filter)
     }
 }
 
@@ -154,6 +162,10 @@ pub struct BamReadFilter {
     whitelisted_barcodes: Option<HashSet<String>>,
     // Read group to keep
     read_group: Option<String>,
+    // SAM tag to filter by
+    filter_tag: Option<String>,
+    // Value for the filter tag
+    filter_tag_value: Option<String>,
     // Statistics for the filtering process
     stats: Arc<BamReadFilterStats>,
 }
@@ -194,6 +206,15 @@ impl Display for BamReadFilter {
                 writeln!(f, "\tNumber of Whitelisted barcodes: 0")?;
             }
         }
+
+        match (&self.filter_tag, &self.filter_tag_value) {
+            (Some(tag), Some(value)) => {
+                writeln!(f, "\tFilter tag: {} = {}", tag, value)?;
+            }
+            _ => {
+                writeln!(f, "\tFilter tag: None")?;
+            }
+        }
         Ok(())
     }
 }
@@ -206,6 +227,8 @@ impl Default for BamReadFilter {
             Some(0),
             Some(0),
             Some(1000),
+            None,
+            None,
             None,
             None,
             None,
@@ -226,6 +249,8 @@ impl BamReadFilter {
     /// * `read_group` - Read group to keep.
     /// * `blacklisted_locations` - Genomic regions to exclude.
     /// * `whitelisted_barcodes` - Cell barcodes to keep.
+    /// * `filter_tag` - SAM tag to filter by.
+    /// * `filter_tag_value` - Value for the filter tag.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         strand: bio_types::strand::Strand,
@@ -236,6 +261,8 @@ impl BamReadFilter {
         read_group: Option<String>,
         blacklisted_locations: Option<HashMap<usize, Lapper<usize, u32>>>,
         whitelisted_barcodes: Option<HashSet<String>>,
+        filter_tag: Option<String>,
+        filter_tag_value: Option<String>,
     ) -> Self {
         let min_mapq = min_mapq.unwrap_or(0);
         let min_length = min_length.unwrap_or(0);
@@ -250,6 +277,8 @@ impl BamReadFilter {
             blacklisted_locations,
             whitelisted_barcodes,
             read_group,
+            filter_tag,
+            filter_tag_value,
             stats: Arc::new(BamReadFilterStats::new()),
         }
     }
@@ -393,6 +422,32 @@ impl BamReadFilter {
                     self.stats
                         .n_not_in_read_group
                         .fetch_add(1, Ordering::Relaxed);
+                    return Ok(false);
+                }
+            }
+        }
+
+        // Filter by tag.
+        if let (Some(filter_tag), Some(filter_tag_value)) = (&self.filter_tag, &self.filter_tag_value) {
+            if filter_tag.len() != 2 {
+                self.stats.n_failed_tag_filter.fetch_add(1, Ordering::Relaxed);
+                return Ok(false);
+            }
+            
+            let tag_bytes = filter_tag.as_bytes();
+            let tag = Tag::new(tag_bytes[0], tag_bytes[1]);
+            let data = alignment.data();
+            let tag_value = data.get(&tag);
+
+            match tag_value {
+                Some(Ok(Value::String(value))) => {
+                    if value != filter_tag_value {
+                        self.stats.n_failed_tag_filter.fetch_add(1, Ordering::Relaxed);
+                        return Ok(false);
+                    }
+                }
+                _ => {
+                    self.stats.n_failed_tag_filter.fetch_add(1, Ordering::Relaxed);
                     return Ok(false);
                 }
             }

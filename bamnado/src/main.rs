@@ -80,6 +80,14 @@ struct FilterOptions {
     /// Selected read group
     #[arg(long, required = false)]
     read_group: Option<String>,
+
+    /// Filter reads by SAM tag (e.g., VP, AS, etc.)
+    #[arg(long, required = false)]
+    filter_tag: Option<String>,
+
+    /// Value for the filter tag (e.g., BCL2, TP, etc.)
+    #[arg(long, required = false)]
+    filter_tag_value: Option<String>,
 }
 
 // Common coverage options for both single and multi-BAM operations
@@ -351,6 +359,8 @@ fn create_filter_from_options(
         filter_options.read_group.clone(),
         blacklisted_locations,
         whitelisted_barcodes,
+        filter_options.filter_tag.clone(),
+        filter_options.filter_tag_value.clone(),
     ))
 }
 
@@ -515,6 +525,8 @@ fn main() -> Result<()> {
                     filter_options.read_group.clone(),
                     blacklisted_locations,
                     bam_barcodes,
+                    filter_options.filter_tag.clone(),
+                    filter_options.filter_tag_value.clone(),
                 );
 
                 // Create pileup
