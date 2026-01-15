@@ -1,20 +1,34 @@
-# Multi-stage build for minimal image size
-FROM rust:latest AS builder
+# Multi-stage build for minimal image size and faster builds
 
+# Stage 1: Planner - generate recipe for cargo-chef
+FROM rust:1.84 AS planner
 WORKDIR /build
-
-# Copy workspace files
+RUN cargo install cargo-chef
 COPY Cargo.toml ./
 COPY bamnado ./bamnado
 COPY bamnado-python ./bamnado-python
+RUN cargo chef prepare --recipe-path recipe.json
 
-# Build the binary in release mode
+# Stage 2: Cacher - build and cache dependencies
+FROM rust:1.84 AS cacher
+WORKDIR /build
+RUN cargo install cargo-chef
+COPY --from=planner /build/recipe.json recipe.json
+RUN cargo chef cook --release --recipe-path recipe.json
+
+# Stage 3: Builder - build the application
+FROM rust:1.84 AS builder
+WORKDIR /build
+COPY Cargo.toml ./
+COPY bamnado ./bamnado
+COPY bamnado-python ./bamnado-python
+COPY --from=cacher /build/target target
 RUN cargo build --release --package bamnado
 
-# Final stage: use ubuntu for good glibc compatibility
-FROM ubuntu:24.04
+# Stage 4: Runtime - minimal final image
+FROM debian:bookworm-slim
 
-# Remove unnecessary packages to reduce image size
+# Install minimal dependencies
 RUN apt-get update && \
     apt-get install -y --no-install-recommends ca-certificates && \
     rm -rf /var/lib/apt/lists/*
