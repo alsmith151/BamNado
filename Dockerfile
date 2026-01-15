@@ -1,6 +1,7 @@
 # Multi-stage build for minimal image size
-FROM rust:latest AS builder
 
+# Stage 1: Builder
+FROM rust:nightly AS builder
 WORKDIR /build
 
 # Copy workspace files
@@ -11,10 +12,10 @@ COPY bamnado-python ./bamnado-python
 # Build the binary in release mode
 RUN cargo build --release --package bamnado
 
-# Final stage: use ubuntu for good glibc compatibility
-FROM ubuntu:24.04
+# Stage 2: Runtime - minimal final image
+FROM debian:bookworm-slim
 
-# Remove unnecessary packages to reduce image size
+# Install minimal dependencies
 RUN apt-get update && \
     apt-get install -y --no-install-recommends ca-certificates && \
     rm -rf /var/lib/apt/lists/*
