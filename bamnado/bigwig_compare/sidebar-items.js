@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["AggregationMode","Comparison"],"fn":["aggregate_bigwigs","compare_bigwigs"]};
