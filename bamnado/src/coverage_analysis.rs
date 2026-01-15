@@ -53,6 +53,9 @@ fn write_bedgraph(
 
     df.sort_in_place(["chrom", "start"], SortMultipleOptions::default())?;
 
+    // Select only the required columns in the correct order for bedGraph format
+    let mut df = df.select(["chrom", "start", "end", "score"])?;
+
     let mut file = std::fs::File::create(outfile)?;
     CsvWriter::new(&mut file)
         .include_header(false)
