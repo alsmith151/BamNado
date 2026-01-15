@@ -1,31 +1,18 @@
-# Multi-stage build for minimal image size and faster builds
+# Multi-stage build for minimal image size
 
-# Stage 1: Planner - generate recipe for cargo-chef
-FROM rust:1.84 AS planner
-WORKDIR /build
-RUN cargo install cargo-chef
-COPY Cargo.toml ./
-COPY bamnado ./bamnado
-COPY bamnado-python ./bamnado-python
-RUN cargo chef prepare --recipe-path recipe.json
-
-# Stage 2: Cacher - build and cache dependencies
-FROM rust:1.84 AS cacher
-WORKDIR /build
-RUN cargo install cargo-chef
-COPY --from=planner /build/recipe.json recipe.json
-RUN cargo chef cook --release --recipe-path recipe.json
-
-# Stage 3: Builder - build the application
+# Stage 1: Builder
 FROM rust:1.84 AS builder
 WORKDIR /build
+
+# Copy workspace files
 COPY Cargo.toml ./
 COPY bamnado ./bamnado
 COPY bamnado-python ./bamnado-python
-COPY --from=cacher /build/target target
+
+# Build the binary in release mode
 RUN cargo build --release --package bamnado
 
-# Stage 4: Runtime - minimal final image
+# Stage 2: Runtime - minimal final image
 FROM debian:bookworm-slim
 
 # Install minimal dependencies
