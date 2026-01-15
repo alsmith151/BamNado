@@ -1,7 +1,7 @@
 # Multi-stage build for minimal image size
 
 # Stage 1: Builder
-FROM rust:1.84 AS builder
+FROM rust:nightly AS builder
 WORKDIR /build
 
 # Copy workspace files
