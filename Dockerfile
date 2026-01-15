@@ -4,7 +4,7 @@ FROM rust:latest AS builder
 WORKDIR /build
 
 # Copy workspace files
-COPY Cargo.toml Cargo.lock ./
+COPY Cargo.toml ./
 COPY bamnado ./bamnado
 COPY bamnado-python ./bamnado-python
 
