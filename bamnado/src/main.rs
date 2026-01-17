@@ -171,63 +171,6 @@ enum Commands {
         filter_options: FilterOptions,
     },
 
-    /// Split a BAM file into endogenous and exogenous reads
-    SplitExogenous {
-        /// Input BAM file
-        #[arg(short, long)]
-        input: PathBuf,
-
-        /// Output prefix
-        #[arg(short, long)]
-        output: PathBuf,
-
-        /// Prefix for exogenous sequences
-        #[arg(short, long)]
-        exogenous_prefix: String,
-
-        /// Path for stats output
-        #[arg(short, long)]
-        stats: Option<PathBuf>,
-
-        /// Allow unknown MAPQ values - useful for BAM files with MAPQ=255 i.e. STAR generated BAM files
-        #[arg(long, action = clap::ArgAction::SetTrue)]
-        allow_unknown_mapq: bool,
-
-        #[command(flatten)]
-        filter_options: FilterOptions,
-    },
-
-    /// Split a BAM file based on a set of defined filters
-    Split {
-        /// Input BAM file
-        #[arg(short, long)]
-        input: PathBuf,
-
-        /// Output prefix
-        #[arg(short, long)]
-        output: PathBuf,
-
-        #[command(flatten)]
-        filter_options: FilterOptions,
-    },
-
-    Modify {
-        /// Input BAM file
-        #[arg(short, long)]
-        input: PathBuf,
-
-        /// Output prefix
-        #[arg(short, long)]
-        output: PathBuf,
-
-        /// Reads to ignore during modification
-        #[command(flatten)]
-        filter_options: FilterOptions,
-
-        #[arg(long, action = clap::ArgAction::SetTrue)]
-        tn5_shift: bool,
-    },
-
     /// Compare two BigWig files
     #[command(name = "bigwig-compare")]
     CompareBigWigs {
@@ -286,7 +229,9 @@ enum Commands {
         #[arg(long)]
         pseudocount: Option<f64>,
     },
+
     /// Collapse adjacent equal-score bins in a BedGraph
+    #[command(name = "collapse-bedgraph")]
     CollapseBedgraph {
         /// Input BedGraph file (defaults to stdin)
         #[arg(short, long)]
@@ -295,6 +240,64 @@ enum Commands {
         /// Output BedGraph file (defaults to stdout)
         #[arg(short, long)]
         output: Option<PathBuf>,
+    },
+
+    /// Split a BAM file based on a set of defined filters
+    Split {
+        /// Input BAM file
+        #[arg(short, long)]
+        input: PathBuf,
+
+        /// Output prefix
+        #[arg(short, long)]
+        output: PathBuf,
+
+        #[command(flatten)]
+        filter_options: FilterOptions,
+    },
+
+    /// Split a BAM file into endogenous and exogenous reads
+    SplitExogenous {
+        /// Input BAM file
+        #[arg(short, long)]
+        input: PathBuf,
+
+        /// Output prefix
+        #[arg(short, long)]
+        output: PathBuf,
+
+        /// Prefix for exogenous sequences
+        #[arg(short, long)]
+        exogenous_prefix: String,
+
+        /// Path for stats output
+        #[arg(short, long)]
+        stats: Option<PathBuf>,
+
+        /// Allow unknown MAPQ values - useful for BAM files with MAPQ=255 i.e. STAR generated BAM files
+        #[arg(long, action = clap::ArgAction::SetTrue)]
+        allow_unknown_mapq: bool,
+
+        #[command(flatten)]
+        filter_options: FilterOptions,
+    },
+
+    /// Filter and/or adjust reads in a BAM file e.g. shift for Tn5 insertion
+    Modify {
+        /// Input BAM file
+        #[arg(short, long)]
+        input: PathBuf,
+
+        /// Output prefix
+        #[arg(short, long)]
+        output: PathBuf,
+
+        /// Reads to ignore during modification
+        #[command(flatten)]
+        filter_options: FilterOptions,
+
+        #[arg(long, action = clap::ArgAction::SetTrue)]
+        tn5_shift: bool,
     },
 }
 
