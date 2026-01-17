@@ -6,11 +6,6 @@ on:
       - '**.md'
       - '**.txt'
       - 'docs/**'
-  pull_request:
-    paths-ignore:
-      - '**.md'
-      - '**.txt'
-      - 'docs/**'
 
 permissions:
   contents: write
