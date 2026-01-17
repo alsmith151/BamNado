@@ -31,14 +31,8 @@ pub enum AggregationMode {
 }
 
 /// Read a range from a BigWig file into a provided array chunk.
-/// # Arguments
-/// * `bw` - Path to the BigWig file.
-/// * `chrom` - Chromosome name.
-/// * `start` - Start position (0-based).
-/// * `end` - End position (0-based, exclusive).
-/// * `array_chunk` - Mutable slice to fill with values.
-/// # Returns
-/// A Result indicating success or failure.
+///
+/// SAFETY: This function is bounds-safe even if `array_chunk.len()` does not match `(end-start)`.
 fn read_bp_range_into_array_chunk(
     bw: &Path,
     chrom: &str,
@@ -46,160 +40,270 @@ fn read_bp_range_into_array_chunk(
     end: u32,
     array_chunk: &mut [f32],
 ) -> Result<()> {
+    if array_chunk.is_empty() || end <= start {
+        return Ok(());
+    }
+
+    // Hard bound: we can only fill as many bp as array_chunk can hold.
+    let max_fill_end = start.saturating_add(array_chunk.len() as u32);
+    let effective_end = std::cmp::min(end, max_fill_end);
+    if effective_end <= start {
+        return Ok(());
+    }
+
     let mut bw = bigtools::BigWigRead::open_file(bw)?;
-    let values = bw.get_interval(chrom, start, end)?;
+    let values = bw.get_interval(chrom, start, effective_end)?;
+
+    let base_offset = start as usize;
+    let chunk_len = array_chunk.len();
+
     for interval_res in values {
         let interval = interval_res?;
-        // clip interval to requested region
+
+        // Clip interval to requested region
         let s = std::cmp::max(interval.start, start) as usize;
-        let e = std::cmp::min(interval.end, end) as usize;
+        let e = std::cmp::min(interval.end, effective_end) as usize;
         if s >= e {
             continue;
         }
-        let base_offset = start as usize;
-        // iterate only inside clipped interval
+
         for pos in s..e {
-            array_chunk[pos - base_offset] = interval.value;
+            let idx = pos.saturating_sub(base_offset);
+            if idx < chunk_len {
+                array_chunk[idx] = interval.value;
+            }
         }
     }
+
     Ok(())
 }
 
-/// Compare two BigWig files and report differences in as a new BigWig file.
-/// # Arguments
-/// * `bw1_path` - Path to the first BigWig file.
-/// * `bw2_path` - Path to the second BigWig file.
-/// * `output_path` - Path to the output BigWig file containing differences.
-/// * `chunksize` - Optional chunk size for processing (in base pairs).
-/// # Returns
-/// A Result indicating success or failure.
-pub fn compare_bigwigs<P>(
-    bw1_path: &P,
-    bw2_path: &Path,
-    output_path: &Path,
-    comparison: Comparison,
-    bin_size: u32,
-    chunksize: Option<usize>,
-    pseudocount: Option<f64>,
-) -> Result<()>
-where
-    P: AsRef<Path> + std::fmt::Debug + Send + Sync,
-{
-    // Initially need to figure out the best genomic chunk size to extract from both files.
-    // On HPCs (most use cases) IO is the bottleneck, so we want to minimize the number of reads.
-    // Initially get the chromosome sizes
-    let chrom_info = bigtools::BigWigRead::open_file(bw1_path.as_ref())?
-        .chroms()
-        .to_owned()
-        .into_iter()
-        .sorted_by(|a, b| a.name.cmp(&b.name))
-        .collect::<Vec<_>>();
+/// Fill a bp-resolution ndarray array from a BigWig in bounded parallel chunks.
+fn fill_array_bp(
+    bw_path: &Path,
+    chrom: &str,
+    chrom_len: usize,
+    chunk_size: usize,
+    out: &mut Array1<f32>,
+) -> Result<()> {
+    if out.len() != chrom_len {
+        return Err(anyhow::anyhow!(
+            "Output array length {} does not match chrom_len {}",
+            out.len(),
+            chrom_len
+        ));
+    }
 
-    let chunk_size = chunksize.unwrap_or(1_000_000); // Default to 1Mb chunks if not specified
-
-    let dfs: Vec<DataFrame> = chrom_info
-        .iter()
-        .progress_with(progress_bar(
-            chrom_info.len() as u64,
-            "Processing chromosomes".to_string(),
-        ))
-        .map(|chromosome| {
-            let mut arr1 = Array1::<f32>::zeros(chromosome.length as usize);
-            let mut arr2 = Array1::<f32>::zeros(chromosome.length as usize);
-
-            arr1.as_slice_mut()
-                .expect("contiguous")
-                .par_chunks_mut(chunk_size)
-                .zip(
-                    arr2.as_slice_mut()
-                        .expect("contiguous")
-                        .par_chunks_mut(chunk_size),
-                )
-                .enumerate()
-                .try_for_each(|(chunk_idx, (a1_chunk, a2_chunk))| -> Result<()> {
-                    let start = chunk_idx * chunk_size;
-                    let end = std::cmp::min(start + chunk_size, chromosome.length as usize);
-                    // Fill a1_chunk and a2_chunk directly (bp resolution)
-                    read_bp_range_into_array_chunk(
-                        bw1_path.as_ref(),
-                        &chromosome.name,
-                        start as u32,
-                        end as u32,
-                        a1_chunk,
-                    )?;
-                    read_bp_range_into_array_chunk(
-                        bw2_path,
-                        &chromosome.name,
-                        start as u32,
-                        end as u32,
-                        a2_chunk,
-                    )?;
-
-                    Ok(())
-                })?;
-
-            // Perform comparison
-            let pc = pseudocount.unwrap_or(1e-12) as f32;
-            let diff = match comparison {
-                Comparison::Subtraction => &arr1 - &arr2,
-                Comparison::Ratio => &arr1 / (&arr2 + pc),
-                Comparison::LogRatio => ((&arr1 + pc) / (&arr2 + pc)).mapv(|x| x.ln()),
-            };
-
-            // Create a bedgraph style output for this chromosome as a polars DataFrame
-            // Binning
-            let n_bins = (chromosome.length as f32 / bin_size as f32).ceil() as usize;
-            let mut chroms = Vec::with_capacity(n_bins);
-            let mut starts = Vec::with_capacity(n_bins);
-            let mut ends = Vec::with_capacity(n_bins);
-            let mut values: Vec<f32> = Vec::with_capacity(n_bins);
-            for bin_idx in 0..n_bins {
-                let start = bin_idx * bin_size as usize;
-                let end = std::cmp::min(start + bin_size as usize, chromosome.length as usize);
-                chroms.push(chromosome.name.clone());
-                starts.push(start as u32);
-                ends.push(end as u32);
-                values.push(diff.slice(s![start..end]).mean().unwrap_or(0.0)); // Handle empty slices
+    out.as_slice_mut()
+        .expect("contiguous")
+        .par_chunks_mut(chunk_size)
+        .enumerate()
+        .try_for_each(|(chunk_idx, chunk)| -> Result<()> {
+            let start = chunk_idx * chunk_size;
+            if start >= chrom_len {
+                return Ok(());
             }
 
-            let mut df = df![
-                "chrom" => chroms,
-                "start" => starts,
-                "end" => ends,
-                "score" => values,
-            ]?;
-            df.sort_in_place(["chrom", "start"], SortMultipleOptions::default())?;
-            Ok(df)
-        })
-        .collect::<Result<Vec<_>>>()?;
+            // Clamp to both chromosome end and actual chunk length.
+            let max_len = chrom_len - start;
+            let eff_len = std::cmp::min(chunk.len(), max_len);
+            if eff_len == 0 {
+                return Ok(());
+            }
 
-    // Concatenate all DataFrames
-    if dfs.is_empty() {
-        return Ok(());
+            let end = start + eff_len;
+
+            read_bp_range_into_array_chunk(
+                bw_path,
+                chrom,
+                start as u32,
+                end as u32,
+                &mut chunk[..eff_len],
+            )?;
+
+            Ok(())
+        })?;
+
+    Ok(())
+}
+
+/// Fill bp-resolution arrays for many BigWigs in parallel (one array per input file).
+fn fill_arrays_bp<P: AsRef<Path> + Send + Sync>(
+    bw_paths: &[P],
+    chrom: &str,
+    chrom_len: usize,
+    chunk_size: usize,
+) -> Result<Vec<Array1<f32>>> {
+    if bw_paths.is_empty() {
+        return Ok(vec![]);
     }
-    let mut final_df = dfs[0].clone();
-    for df in dfs.iter().skip(1) {
+
+    let mut arrays: Vec<Array1<f32>> = (0..bw_paths.len())
+        .map(|_| Array1::<f32>::zeros(chrom_len))
+        .collect();
+
+    arrays
+        .par_iter_mut()
+        .zip(bw_paths.par_iter())
+        .try_for_each(|(arr, p)| fill_array_bp(p.as_ref(), chrom, chrom_len, chunk_size, arr))?;
+
+    Ok(arrays)
+}
+
+/// Turn a single signal into a binned bedGraph-like DataFrame.
+fn binned_df_from_signal(chrom: &str, signal: &Array1<f32>, bin_size: u32) -> Result<DataFrame> {
+    let len = signal.len();
+    if len == 0 {
+        return Ok(DataFrame::empty());
+    }
+
+    let bin = bin_size as usize;
+    if bin == 0 {
+        return Err(anyhow::anyhow!("bin_size must be > 0"));
+    }
+
+    let n_bins = len.div_ceil(bin);
+
+    let mut chroms = Vec::with_capacity(n_bins);
+    let mut starts = Vec::with_capacity(n_bins);
+    let mut ends = Vec::with_capacity(n_bins);
+    let mut values = Vec::with_capacity(n_bins);
+
+    for i in 0..n_bins {
+        let start = i * bin;
+        if start >= len {
+            break;
+        }
+        let end = std::cmp::min(start + bin, len);
+
+        chroms.push(chrom.to_string());
+        starts.push(start as u32);
+        ends.push(end as u32);
+        values.push(signal.slice(s![start..end]).mean().unwrap_or(0.0));
+    }
+
+    let mut df = df![
+        "chrom" => chroms,
+        "start" => starts,
+        "end" => ends,
+        "score" => values,
+    ]?;
+    df.sort_in_place(["chrom", "start"], SortMultipleOptions::default())?;
+    Ok(df)
+}
+
+/// Median aggregation per bin across multiple arrays.
+/// Semantics: flatten all bp values across all inputs within a bin, then take median.
+fn binned_df_median_from_arrays(
+    chrom: &str,
+    arrays: &[Array1<f32>],
+    bin_size: u32,
+) -> Result<DataFrame> {
+    if arrays.is_empty() {
+        return Ok(DataFrame::empty());
+    }
+    let len = arrays[0].len();
+    if len == 0 {
+        return Ok(DataFrame::empty());
+    }
+
+    let bin = bin_size as usize;
+    if bin == 0 {
+        return Err(anyhow::anyhow!("bin_size must be > 0"));
+    }
+
+    // If lengths disagree, be strict (this should never happen).
+    if arrays.iter().any(|a| a.len() != len) {
+        return Err(anyhow::anyhow!(
+            "Input arrays have different lengths for chromosome {}",
+            chrom
+        ));
+    }
+
+    let n_bins = len.div_ceil(bin);
+
+    let mut chroms = Vec::with_capacity(n_bins);
+    let mut starts = Vec::with_capacity(n_bins);
+    let mut ends = Vec::with_capacity(n_bins);
+    let mut values = Vec::with_capacity(n_bins);
+
+    for i in 0..n_bins {
+        let start = i * bin;
+        if start >= len {
+            break;
+        }
+        let end = std::cmp::min(start + bin, len);
+
+        chroms.push(chrom.to_string());
+        starts.push(start as u32);
+        ends.push(end as u32);
+
+        let mut bin_vals = Vec::with_capacity((end - start) * arrays.len());
+        for arr in arrays {
+            // slice is safe (start/end clamped to len)
+            bin_vals.extend(arr.slice(s![start..end]).iter().copied());
+        }
+
+        let med = if bin_vals.is_empty() {
+            0.0
+        } else {
+            bin_vals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            let mid = bin_vals.len() / 2;
+            if bin_vals.len() % 2 == 0 {
+                (bin_vals[mid - 1] + bin_vals[mid]) / 2.0
+            } else {
+                bin_vals[mid]
+            }
+        };
+        values.push(med);
+    }
+
+    let mut df = df![
+        "chrom" => chroms,
+        "start" => starts,
+        "end" => ends,
+        "score" => values,
+    ]?;
+    df.sort_in_place(["chrom", "start"], SortMultipleOptions::default())?;
+    Ok(df)
+}
+
+/// Concatenate per-chromosome DataFrames.
+fn concat_dfs(mut dfs: Vec<DataFrame>) -> Result<Option<DataFrame>> {
+    if dfs.is_empty() {
+        return Ok(None);
+    }
+    let mut final_df = dfs.remove(0);
+    for df in dfs.iter() {
         final_df.vstack_mut(df)?;
     }
-    // Write chrom sizes to temp file
+    Ok(Some(final_df))
+}
+
+/// Write a bedGraph-like DataFrame as a BigWig using bigtools.
+fn write_bedgraph_df_to_bigwig(
+    df: &mut DataFrame,
+    chrom_info: &[bigtools::ChromInfo],
+    output_path: &Path,
+) -> Result<()> {
+    // Chromsizes
     let chromsizes_file = tempfile::NamedTempFile::new()?;
     {
         let mut writer = std::io::BufWriter::new(&chromsizes_file);
-        for chrom in &chrom_info {
+        for chrom in chrom_info {
             writeln!(writer, "{}\t{}", chrom.name, chrom.length)?;
         }
     }
 
-    // Write bedgraph to temp file
+    // Bedgraph temp
     info!("Writing temporary bedgraph file");
     let bedgraph_file = tempfile::NamedTempFile::new()?;
     let bedgraph_path = bedgraph_file.path();
 
-    // Use CsvWriter to write tab-separated values
     CsvWriter::new(&bedgraph_file)
         .include_header(false)
         .with_separator(b'\t')
-        .finish(&mut final_df)?;
+        .finish(df)?;
 
     // Convert to BigWig
     let args = bigtools::utils::cli::bedgraphtobigwig::BedGraphToBigWigArgs {
@@ -219,6 +323,7 @@ where
             inmemory: false,
         },
     };
+
     info!("Writing output BigWig to {:?}", output_path);
     bigtools::utils::cli::bedgraphtobigwig::bedgraphtobigwig(args)
         .map_err(|e| anyhow::anyhow!("Error converting bedgraph to bigwig: {}", e))?;
@@ -226,16 +331,62 @@ where
     Ok(())
 }
 
-/// Aggregate multiple BigWig files into a single output BigWig.
-/// # Arguments
-/// * `bw_paths` - Vector of paths to BigWig files to aggregate.
-/// * `output_path` - Path to the output BigWig file.
-/// * `aggregation_mode` - The aggregation method (Sum, Mean, Median, Max, Min).
-/// * `bin_size` - Size of bins for binning the output signal.
-/// * `chunksize` - Optional chunk size for processing (in base pairs).
-/// * `pseudocount` - Optional pseudocount value for aggregation (added to all values).
-/// # Returns
-/// A Result indicating success or failure.
+/// Compare two BigWig files and output the result as a BigWig.
+pub fn compare_bigwigs<P>(
+    bw1_path: &P,
+    bw2_path: &Path,
+    output_path: &Path,
+    comparison: Comparison,
+    bin_size: u32,
+    chunksize: Option<usize>,
+    pseudocount: Option<f64>,
+) -> Result<()>
+where
+    P: AsRef<Path> + std::fmt::Debug + Send + Sync,
+{
+    let chrom_info = bigtools::BigWigRead::open_file(bw1_path.as_ref())?
+        .chroms()
+        .to_owned()
+        .into_iter()
+        .sorted_by(|a, b| a.name.cmp(&b.name))
+        .collect::<Vec<_>>();
+
+    let chunk_size = chunksize.unwrap_or(1_000_000);
+    let pc = pseudocount.unwrap_or(1e-12) as f32;
+
+    let dfs: Vec<DataFrame> = chrom_info
+        .iter()
+        .progress_with(progress_bar(
+            chrom_info.len() as u64,
+            "Processing chromosomes".to_string(),
+        ))
+        .map(|chr| {
+            let len = chr.length as usize;
+
+            let mut a1 = Array1::<f32>::zeros(len);
+            let mut a2 = Array1::<f32>::zeros(len);
+
+            fill_array_bp(bw1_path.as_ref(), &chr.name, len, chunk_size, &mut a1)?;
+            fill_array_bp(bw2_path, &chr.name, len, chunk_size, &mut a2)?;
+
+            let diff = match comparison {
+                Comparison::Subtraction => &a1 - &a2,
+                Comparison::Ratio => &a1 / (&a2 + pc),
+                Comparison::LogRatio => ((&a1 + pc) / (&a2 + pc)).mapv(|x| x.ln()),
+            };
+
+            binned_df_from_signal(&chr.name, &diff, bin_size)
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    let Some(mut final_df) = concat_dfs(dfs)? else {
+        return Ok(());
+    };
+
+    write_bedgraph_df_to_bigwig(&mut final_df, &chrom_info, output_path)
+}
+
+/// Aggregate multiple BigWigs into a single output BigWig.
 pub fn aggregate_bigwigs<P>(
     bw_paths: &[P],
     output_path: &Path,
@@ -251,7 +402,6 @@ where
         return Err(anyhow::anyhow!("At least one BigWig file is required"));
     }
 
-    // Get chromosome information from the first file
     let chrom_info = bigtools::BigWigRead::open_file(bw_paths[0].as_ref())?
         .chroms()
         .to_owned()
@@ -259,7 +409,8 @@ where
         .sorted_by(|a, b| a.name.cmp(&b.name))
         .collect::<Vec<_>>();
 
-    let chunk_size = chunksize.unwrap_or(1_000_000); // Default to 1Mb chunks if not specified
+    let chunk_size = chunksize.unwrap_or(1_000_000);
+    let pc = pseudocount.unwrap_or(0.0) as f32;
 
     let dfs: Vec<DataFrame> = chrom_info
         .iter()
@@ -267,195 +418,58 @@ where
             chrom_info.len() as u64,
             "Processing chromosomes".to_string(),
         ))
-        .map(|chromosome| {
-            // Allocate arrays for all input BigWigs at bp resolution
-            let mut arrays: Vec<Array1<f32>> = (0..bw_paths.len())
-                .map(|_| Array1::<f32>::zeros(chromosome.length as usize))
-                .collect();
+        .map(|chr| {
+            let len = chr.length as usize;
 
-            // Fill arrays in parallel chunks
-            arrays
-                .iter_mut()
-                .zip(bw_paths.iter())
-                .enumerate()
-                .try_for_each(|(_bw_idx, (arr, bw_path))| {
-                    arr.as_slice_mut()
-                        .expect("contiguous")
-                        .par_chunks_mut(chunk_size)
-                        .enumerate()
-                        .try_for_each(|(chunk_idx, chunk)| -> Result<()> {
-                            let start = chunk_idx * chunk_size;
-                            let end = std::cmp::min(start + chunk_size, chromosome.length as usize);
-                            read_bp_range_into_array_chunk(
-                                bw_path.as_ref(),
-                                &chromosome.name,
-                                start as u32,
-                                end as u32,
-                                chunk,
-                            )?;
-                            Ok(())
-                        })?;
-                    Ok::<(), anyhow::Error>(())
-                })?;
+            let mut arrays = fill_arrays_bp(bw_paths, &chr.name, len, chunk_size)?;
 
-            // Perform aggregation
-            let pc = pseudocount.unwrap_or(0.0) as f32;
+            // Add pseudocount to all arrays (in-place)
+            arrays.iter_mut().for_each(|a| *a = &*a + pc);
 
-            // Add pseudocount to all arrays
-            let arrays: Vec<Array1<f32>> = arrays.into_iter().map(|arr| &arr + pc).collect();
+            match aggregation_mode {
+                AggregationMode::Median => {
+                    binned_df_median_from_arrays(&chr.name, &arrays, bin_size)
+                }
 
-            let aggregated = match aggregation_mode {
-                AggregationMode::Sum => arrays
-                    .iter()
-                    .skip(1)
-                    .fold(arrays[0].clone(), |acc, arr| &acc + arr),
+                AggregationMode::Sum => {
+                    let agg = arrays
+                        .iter()
+                        .skip(1)
+                        .fold(arrays[0].clone(), |acc, a| &acc + a);
+                    binned_df_from_signal(&chr.name, &agg, bin_size)
+                }
                 AggregationMode::Mean => {
                     let sum = arrays
                         .iter()
                         .skip(1)
-                        .fold(arrays[0].clone(), |acc, arr| &acc + arr);
-                    sum / arrays.len() as f32
+                        .fold(arrays[0].clone(), |acc, a| &acc + a);
+                    let agg = sum / arrays.len() as f32;
+                    binned_df_from_signal(&chr.name, &agg, bin_size)
                 }
                 AggregationMode::Max => {
-                    arrays.iter().skip(1).fold(arrays[0].clone(), |acc, arr| {
-                        acc.iter().zip(arr.iter()).map(|(a, b)| a.max(*b)).collect()
-                    })
+                    let agg = arrays.iter().skip(1).fold(arrays[0].clone(), |acc, a| {
+                        acc.iter().zip(a.iter()).map(|(x, y)| x.max(*y)).collect()
+                    });
+                    binned_df_from_signal(&chr.name, &agg, bin_size)
                 }
                 AggregationMode::Min => {
-                    arrays.iter().skip(1).fold(arrays[0].clone(), |acc, arr| {
-                        acc.iter().zip(arr.iter()).map(|(a, b)| a.min(*b)).collect()
-                    })
+                    let agg = arrays.iter().skip(1).fold(arrays[0].clone(), |acc, a| {
+                        acc.iter().zip(a.iter()).map(|(x, y)| x.min(*y)).collect()
+                    });
+                    binned_df_from_signal(&chr.name, &agg, bin_size)
                 }
-                AggregationMode::Median => {
-                    // Median will be computed per bin after binning
-                    // For now, create a placeholder that we'll handle specially
-                    arrays[0].clone()
-                }
-            };
-
-            // Binning
-            let chromosome_length = chromosome.length as usize;
-            let n_bins = (chromosome_length as f32 / bin_size as f32).ceil() as usize;
-            let mut chroms = Vec::with_capacity(n_bins);
-            let mut starts = Vec::with_capacity(n_bins);
-            let mut ends = Vec::with_capacity(n_bins);
-            let mut values: Vec<f32> = Vec::with_capacity(n_bins);
-
-            for bin_idx in 0..n_bins {
-                let start = bin_idx * bin_size as usize;
-                let end = std::cmp::min((bin_idx + 1) * bin_size as usize, chromosome_length);
-
-                // Skip bins that would start at or beyond the chromosome end
-                if start >= chromosome_length {
-                    continue;
-                }
-                chroms.push(chromosome.name.clone());
-                starts.push(start as u32);
-                ends.push(end as u32);
-
-                let bin_value = match aggregation_mode {
-                    AggregationMode::Median => {
-                        // For median, collect values from all arrays in this bin
-                        let mut bin_values: Vec<f32> = Vec::new();
-                        for arr in &arrays {
-                            if end <= arr.len() {
-                                let slice = arr.slice(s![start..end]);
-                                bin_values.extend(slice.to_vec());
-                            }
-                        }
-                        if bin_values.is_empty() {
-                            0.0
-                        } else {
-                            bin_values.sort_by(|a, b| {
-                                a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
-                            });
-                            let mid = bin_values.len() / 2;
-                            if bin_values.len().is_multiple_of(2) {
-                                (bin_values[mid - 1] + bin_values[mid]) / 2.0
-                            } else {
-                                bin_values[mid]
-                            }
-                        }
-                    }
-                    _ => {
-                        if end <= aggregated.len() {
-                            aggregated.slice(s![start..end]).mean().unwrap_or(0.0)
-                        } else {
-                            0.0
-                        }
-                    }
-                };
-
-                values.push(bin_value);
             }
-
-            let mut df = df![
-                "chrom" => chroms,
-                "start" => starts,
-                "end" => ends,
-                "score" => values,
-            ]?;
-            df.sort_in_place(["chrom", "start"], SortMultipleOptions::default())?;
-            Ok(df)
         })
         .collect::<Result<Vec<_>>>()?;
 
-    // Concatenate all DataFrames
-    if dfs.is_empty() {
+    let Some(mut final_df) = concat_dfs(dfs)? else {
         return Ok(());
-    }
-    let mut final_df = dfs[0].clone();
-    for df in dfs.iter().skip(1) {
-        final_df.vstack_mut(df)?;
-    }
-
-    // Write chrom sizes to temp file
-    let chromsizes_file = tempfile::NamedTempFile::new()?;
-    {
-        let mut writer = std::io::BufWriter::new(&chromsizes_file);
-        for chrom in &chrom_info {
-            writeln!(writer, "{}\t{}", chrom.name, chrom.length)?;
-        }
-    }
-
-    // Write bedgraph to temp file
-    info!("Writing temporary bedgraph file");
-    let bedgraph_file = tempfile::NamedTempFile::new()?;
-    let bedgraph_path = bedgraph_file.path();
-
-    // Use CsvWriter to write tab-separated values
-    CsvWriter::new(&bedgraph_file)
-        .include_header(false)
-        .with_separator(b'\t')
-        .finish(&mut final_df)?;
-
-    // Convert to BigWig
-    let args = bigtools::utils::cli::bedgraphtobigwig::BedGraphToBigWigArgs {
-        bedgraph: bedgraph_path.to_string_lossy().to_string(),
-        chromsizes: chromsizes_file.path().to_string_lossy().to_string(),
-        output: output_path.to_string_lossy().to_string(),
-        parallel: "auto".to_string(),
-        single_pass: true,
-        write_args: bigtools::utils::cli::BBIWriteArgs {
-            nthreads: 6,
-            nzooms: 10,
-            uncompressed: false,
-            sorted: "all".to_string(),
-            zooms: None,
-            block_size: DEFAULT_BLOCK_SIZE,
-            items_per_slot: DEFAULT_ITEMS_PER_SLOT,
-            inmemory: false,
-        },
     };
-    info!("Writing output BigWig to {:?}", output_path);
-    bigtools::utils::cli::bedgraphtobigwig::bedgraphtobigwig(args)
-        .map_err(|e| anyhow::anyhow!("Error converting bedgraph to bigwig: {}", e))?;
 
-    Ok(())
+    write_bedgraph_df_to_bigwig(&mut final_df, &chrom_info, output_path)
 }
 
 #[cfg(test)]
-
 mod tests {
     use super::*;
     use bigtools::BigWigRead;
@@ -549,10 +563,6 @@ mod tests {
             .get_interval("chr1", 0, 200)?
             .collect::<Result<Vec<_>, _>>()?;
 
-        // We expect roughly 5.0 and 10.0 difference
-        // Note: binning might affect exact values if not aligned, but here it aligns
-
-        // Check a few points
         let val1 = intervals
             .iter()
             .find(|i| i.start == 0)

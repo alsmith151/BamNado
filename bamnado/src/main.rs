@@ -2,9 +2,11 @@ use anyhow::{Context, Result};
 use bamnado::bam_utils::FileType;
 use clap::{Parser, Subcommand};
 use log::info;
+use polars::prelude::*;
 use std::str::FromStr;
 use std::{
-    io::Write,
+    fs::File,
+    io::{self, BufRead, BufReader, Write},
     path::{Path, PathBuf},
 };
 
@@ -169,63 +171,6 @@ enum Commands {
         filter_options: FilterOptions,
     },
 
-    /// Split a BAM file into endogenous and exogenous reads
-    SplitExogenous {
-        /// Input BAM file
-        #[arg(short, long)]
-        input: PathBuf,
-
-        /// Output prefix
-        #[arg(short, long)]
-        output: PathBuf,
-
-        /// Prefix for exogenous sequences
-        #[arg(short, long)]
-        exogenous_prefix: String,
-
-        /// Path for stats output
-        #[arg(short, long)]
-        stats: Option<PathBuf>,
-
-        /// Allow unknown MAPQ values - useful for BAM files with MAPQ=255 i.e. STAR generated BAM files
-        #[arg(long, action = clap::ArgAction::SetTrue)]
-        allow_unknown_mapq: bool,
-
-        #[command(flatten)]
-        filter_options: FilterOptions,
-    },
-
-    /// Split a BAM file based on a set of defined filters
-    Split {
-        /// Input BAM file
-        #[arg(short, long)]
-        input: PathBuf,
-
-        /// Output prefix
-        #[arg(short, long)]
-        output: PathBuf,
-
-        #[command(flatten)]
-        filter_options: FilterOptions,
-    },
-
-    Modify {
-        /// Input BAM file
-        #[arg(short, long)]
-        input: PathBuf,
-
-        /// Output prefix
-        #[arg(short, long)]
-        output: PathBuf,
-
-        /// Reads to ignore during modification
-        #[command(flatten)]
-        filter_options: FilterOptions,
-
-        #[arg(long, action = clap::ArgAction::SetTrue)]
-        tn5_shift: bool,
-    },
-
     /// Compare two BigWig files
     #[command(name = "bigwig-compare")]
     CompareBigWigs {
@@ -283,6 +228,76 @@ enum Commands {
         /// Pseudocount value to add to all values
         #[arg(long)]
         pseudocount: Option<f64>,
+    },
+
+    /// Collapse adjacent equal-score bins in a BedGraph
+    #[command(name = "collapse-bedgraph")]
+    CollapseBedgraph {
+        /// Input BedGraph file (defaults to stdin)
+        #[arg(short, long)]
+        input: Option<PathBuf>,
+
+        /// Output BedGraph file (defaults to stdout)
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+
+    /// Split a BAM file based on a set of defined filters
+    Split {
+        /// Input BAM file
+        #[arg(short, long)]
+        input: PathBuf,
+
+        /// Output prefix
+        #[arg(short, long)]
+        output: PathBuf,
+
+        #[command(flatten)]
+        filter_options: FilterOptions,
+    },
+
+    /// Split a BAM file into endogenous and exogenous reads
+    SplitExogenous {
+        /// Input BAM file
+        #[arg(short, long)]
+        input: PathBuf,
+
+        /// Output prefix
+        #[arg(short, long)]
+        output: PathBuf,
+
+        /// Prefix for exogenous sequences
+        #[arg(short, long)]
+        exogenous_prefix: String,
+
+        /// Path for stats output
+        #[arg(short, long)]
+        stats: Option<PathBuf>,
+
+        /// Allow unknown MAPQ values - useful for BAM files with MAPQ=255 i.e. STAR generated BAM files
+        #[arg(long, action = clap::ArgAction::SetTrue)]
+        allow_unknown_mapq: bool,
+
+        #[command(flatten)]
+        filter_options: FilterOptions,
+    },
+
+    /// Filter and/or adjust reads in a BAM file e.g. shift for Tn5 insertion
+    Modify {
+        /// Input BAM file
+        #[arg(short, long)]
+        input: PathBuf,
+
+        /// Output prefix
+        #[arg(short, long)]
+        output: PathBuf,
+
+        /// Reads to ignore during modification
+        #[command(flatten)]
+        filter_options: FilterOptions,
+
+        #[arg(long, action = clap::ArgAction::SetTrue)]
+        tn5_shift: bool,
     },
 }
 
@@ -726,6 +741,63 @@ fn main() -> Result<()> {
                 bigwigs.len(),
                 output.display()
             );
+        }
+        Commands::CollapseBedgraph { input, output } => {
+            // read bedgraph
+            let reader: Box<dyn BufRead> = match input {
+                Some(p) => Box::new(BufReader::new(File::open(p)?)),
+                None => Box::new(BufReader::new(io::stdin())),
+            };
+
+            let mut chroms: Vec<String> = Vec::new();
+            let mut starts: Vec<i64> = Vec::new();
+            let mut ends: Vec<i64> = Vec::new();
+            let mut scores: Vec<f64> = Vec::new();
+
+            for line in reader.lines() {
+                let l = line?;
+                let l = l.trim();
+                if l.is_empty() || l.starts_with('#') {
+                    continue;
+                }
+                let parts: Vec<&str> = l.split_whitespace().collect();
+                if parts.len() < 4 {
+                    continue;
+                }
+                chroms.push(parts[0].to_string());
+                starts.push(parts[1].parse()?);
+                ends.push(parts[2].parse()?);
+                scores.push(parts[3].parse()?);
+            }
+
+            let df = DataFrame::new(vec![
+                Column::new("chrom".into(), chroms),
+                Column::new("start".into(), starts),
+                Column::new("end".into(), ends),
+                Column::new("score".into(), scores),
+            ])?;
+
+            let collapsed = bamnado::bedgraph_utils::collapse_adjacent_bins(df)?;
+
+            match output {
+                Some(p) => {
+                    let f = File::create(p)?;
+                    let mut out_df = collapsed;
+                    let w = CsvWriter::new(f);
+                    w.include_header(false)
+                        .with_separator(b'\t')
+                        .finish(&mut out_df)?;
+                }
+                None => {
+                    let stdout = io::stdout();
+                    let handle = stdout.lock();
+                    let mut out_df = collapsed;
+                    let w = CsvWriter::new(handle);
+                    w.include_header(false)
+                        .with_separator(b'\t')
+                        .finish(&mut out_df)?;
+                }
+            }
         }
     }
 
