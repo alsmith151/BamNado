@@ -334,7 +334,8 @@ where
             };
 
             // Binning
-            let n_bins = (chromosome.length as f32 / bin_size as f32).ceil() as usize;
+            let chromosome_length = chromosome.length as usize;
+            let n_bins = (chromosome_length as f32 / bin_size as f32).ceil() as usize;
             let mut chroms = Vec::with_capacity(n_bins);
             let mut starts = Vec::with_capacity(n_bins);
             let mut ends = Vec::with_capacity(n_bins);
@@ -342,7 +343,12 @@ where
 
             for bin_idx in 0..n_bins {
                 let start = bin_idx * bin_size as usize;
-                let end = std::cmp::min(start + bin_size as usize, chromosome.length as usize);
+                let end = std::cmp::min((bin_idx + 1) * bin_size as usize, chromosome_length);
+
+                // Skip bins that would start at or beyond the chromosome end
+                if start >= chromosome_length {
+                    continue;
+                }
                 chroms.push(chromosome.name.clone());
                 starts.push(start as u32);
                 ends.push(end as u32);
@@ -352,8 +358,10 @@ where
                         // For median, collect values from all arrays in this bin
                         let mut bin_values: Vec<f32> = Vec::new();
                         for arr in &arrays {
-                            let slice = arr.slice(s![start..end]);
-                            bin_values.extend(slice.to_vec());
+                            if end <= arr.len() {
+                                let slice = arr.slice(s![start..end]);
+                                bin_values.extend(slice.to_vec());
+                            }
                         }
                         if bin_values.is_empty() {
                             0.0
@@ -369,7 +377,13 @@ where
                             }
                         }
                     }
-                    _ => aggregated.slice(s![start..end]).mean().unwrap_or(0.0),
+                    _ => {
+                        if end <= aggregated.len() {
+                            aggregated.slice(s![start..end]).mean().unwrap_or(0.0)
+                        } else {
+                            0.0
+                        }
+                    }
                 };
 
                 values.push(bin_value);
