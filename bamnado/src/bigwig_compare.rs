@@ -30,6 +30,8 @@ pub enum AggregationMode {
     Min,
 }
 
+// Collapse logic moved to `bedgraph_utils::collapse_adjacent_bins`
+
 /// Read a range from a BigWig file into a provided array chunk.
 /// # Arguments
 /// * `bw` - Path to the BigWig file.
@@ -168,7 +170,7 @@ where
                 "end" => ends,
                 "score" => values,
             ]?;
-            df.sort_in_place(["chrom", "start"], SortMultipleOptions::default())?;
+            df = crate::bedgraph_utils::collapse_adjacent_bins(df)?;
             Ok(df)
         })
         .collect::<Result<Vec<_>>>()?;
@@ -181,6 +183,8 @@ where
     for df in dfs.iter().skip(1) {
         final_df.vstack_mut(df)?;
     }
+    final_df = crate::bedgraph_utils::collapse_adjacent_bins(final_df)?;
+
     // Write chrom sizes to temp file
     let chromsizes_file = tempfile::NamedTempFile::new()?;
     {
@@ -189,6 +193,8 @@ where
             writeln!(writer, "{}\t{}", chrom.name, chrom.length)?;
         }
     }
+
+    println!("{:?}", final_df.head(Some(20)));
 
     // Write bedgraph to temp file
     info!("Writing temporary bedgraph file");
@@ -395,7 +401,7 @@ where
                 "end" => ends,
                 "score" => values,
             ]?;
-            df.sort_in_place(["chrom", "start"], SortMultipleOptions::default())?;
+            df = crate::bedgraph_utils::collapse_adjacent_bins(df)?;
             Ok(df)
         })
         .collect::<Result<Vec<_>>>()?;
@@ -408,6 +414,8 @@ where
     for df in dfs.iter().skip(1) {
         final_df.vstack_mut(df)?;
     }
+
+    final_df = crate::bedgraph_utils::collapse_adjacent_bins(final_df)?;
 
     // Write chrom sizes to temp file
     let chromsizes_file = tempfile::NamedTempFile::new()?;
@@ -460,6 +468,63 @@ mod tests {
     use super::*;
     use bigtools::BigWigRead;
     use std::collections::HashMap;
+
+    fn df_rows(df: &DataFrame) -> Result<Vec<(String, i64, i64, f64)>> {
+        let chrom = df.column("chrom")?.str()?;
+        let start = df.column("start")?.i64()?;
+        let end = df.column("end")?.i64()?;
+        let score = df.column("score")?.f64()?;
+        let mut rows = Vec::with_capacity(df.height());
+        for idx in 0..df.height() {
+            rows.push((
+                chrom.get(idx).unwrap().to_string(),
+                start.get(idx).unwrap(),
+                end.get(idx).unwrap(),
+                score.get(idx).unwrap(),
+            ));
+        }
+        Ok(rows)
+    }
+
+    #[test]
+    fn test_collapse_adjacent_bins_empty_df() -> Result<()> {
+        let df = DataFrame::new(vec![
+            Column::new("chrom".into(), Vec::<&str>::new()),
+            Column::new("start".into(), Vec::<i64>::new()),
+            Column::new("end".into(), Vec::<i64>::new()),
+            Column::new("score".into(), Vec::<f64>::new()),
+        ])?;
+
+        let collapsed = crate::bedgraph_utils::collapse_adjacent_bins(df)?;
+        assert_eq!(collapsed.height(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn test_collapse_adjacent_bins_contiguity_and_chrom_scoping() -> Result<()> {
+        let df = DataFrame::new(vec![
+            Column::new(
+                "chrom".into(),
+                &["chr1", "chr1", "chr1", "chr1", "chr2", "chr2"],
+            ),
+            Column::new("start".into(), &[0i64, 10, 21, 30, 0, 5]),
+            Column::new("end".into(), &[10i64, 20, 30, 40, 5, 10]),
+            Column::new("score".into(), &[1.0f64, 1.0, 1.0, 2.0, 1.0, 1.0]),
+        ])?;
+
+        let collapsed = crate::bedgraph_utils::collapse_adjacent_bins(df)?;
+        let rows = df_rows(&collapsed)?;
+
+        let expected = vec![
+            ("chr1".to_string(), 0, 20, 1.0),
+            ("chr1".to_string(), 21, 30, 1.0),
+            ("chr1".to_string(), 30, 40, 2.0),
+            ("chr2".to_string(), 0, 10, 1.0),
+        ];
+
+        assert_eq!(rows, expected);
+        Ok(())
+    }
 
     fn create_dummy_bigwig(
         path: &Path,
@@ -761,6 +826,207 @@ mod tests {
             );
         }
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_aggregate_bigwigs_collapses_adjacent_equal_scores() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let bw_path = dir.path().join("in.bw");
+        let out_path = dir.path().join("out_agg.bw");
+
+        let mut chrom_map = HashMap::new();
+        chrom_map.insert("chr1".to_string(), 1000);
+
+        // Create contiguous bins with values where two adjacent bins have the same value
+        let values = vec![
+            ("chr1".to_string(), 0, 100, 1.0),
+            ("chr1".to_string(), 100, 200, 2.0),
+            ("chr1".to_string(), 200, 300, 2.0),
+            ("chr1".to_string(), 300, 400, 3.0),
+        ];
+
+        create_dummy_bigwig(&bw_path, chrom_map.clone(), values)?;
+
+        aggregate_bigwigs(
+            &[bw_path.clone()],
+            &out_path,
+            AggregationMode::Sum,
+            100,
+            None,
+            None,
+        )?;
+
+        assert!(out_path.exists());
+
+        let mut reader = BigWigRead::open_file(out_path.to_str().unwrap())?;
+        let intervals: Vec<_> = reader
+            .get_interval("chr1", 0, 400)?
+            .collect::<Result<Vec<_>, _>>()?;
+        println!("{:?}", intervals);
+
+        // Expect 3 intervals after collapsing: 0-100, 100-300, 300-400
+        assert_eq!(
+            intervals.len(),
+            3,
+            "Expected 3 intervals, got {}",
+            intervals.len()
+        );
+
+        let v0 = intervals.iter().find(|i| i.start == 0).unwrap();
+        assert!((v0.value - 1.0).abs() < 1e-6);
+
+        let v1 = intervals.iter().find(|i| i.start == 100).unwrap();
+        assert_eq!(v1.end, 300);
+        assert!((v1.value - 2.0).abs() < 1e-6);
+
+        let v2 = intervals.iter().find(|i| i.start == 300).unwrap();
+        assert!((v2.value - 3.0).abs() < 1e-6);
+
+        // Note: trailing zero-coverage bins may be omitted in the BigWig output.
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_aggregate_bigwigs_sum_and_mean() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let bw1 = dir.path().join("a.bw");
+        let bw2 = dir.path().join("b.bw");
+        let out_sum = dir.path().join("out_sum.bw");
+        let out_mean = dir.path().join("out_mean.bw");
+
+        let mut chrom_map = HashMap::new();
+        chrom_map.insert("chr1".to_string(), 1000);
+
+        let vals1 = vec![
+            ("chr1".to_string(), 0, 100, 1.0),
+            ("chr1".to_string(), 100, 200, 2.0),
+        ];
+        let vals2 = vec![
+            ("chr1".to_string(), 0, 100, 3.0),
+            ("chr1".to_string(), 100, 200, 4.0),
+        ];
+
+        create_dummy_bigwig(&bw1, chrom_map.clone(), vals1)?;
+        create_dummy_bigwig(&bw2, chrom_map.clone(), vals2)?;
+
+        aggregate_bigwigs(
+            &[bw1.clone(), bw2.clone()],
+            &out_sum,
+            AggregationMode::Sum,
+            100,
+            None,
+            None,
+        )?;
+        aggregate_bigwigs(
+            &[bw1, bw2],
+            &out_mean,
+            AggregationMode::Mean,
+            100,
+            None,
+            None,
+        )?;
+
+        let mut rsum = BigWigRead::open_file(out_sum.to_str().unwrap())?;
+        let s_intervals: Vec<_> = rsum
+            .get_interval("chr1", 0, 200)?
+            .collect::<Result<Vec<_>, _>>()?;
+        let v0 = s_intervals.iter().find(|i| i.start == 0).unwrap();
+        assert!((v0.value - 4.0).abs() < 1e-6);
+        let v1 = s_intervals.iter().find(|i| i.start == 100).unwrap();
+        assert!((v1.value - 6.0).abs() < 1e-6);
+
+        let mut rmean = BigWigRead::open_file(out_mean.to_str().unwrap())?;
+        let m_intervals: Vec<_> = rmean
+            .get_interval("chr1", 0, 200)?
+            .collect::<Result<Vec<_>, _>>()?;
+        let mv0 = m_intervals.iter().find(|i| i.start == 0).unwrap();
+        assert!((mv0.value - 2.0).abs() < 1e-6);
+        let mv1 = m_intervals.iter().find(|i| i.start == 100).unwrap();
+        assert!((mv1.value - 3.0).abs() < 1e-6);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_aggregate_bigwigs_median() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let bw1 = dir.path().join("m1.bw");
+        let bw2 = dir.path().join("m2.bw");
+        let out = dir.path().join("out_med.bw");
+
+        let mut chrom_map = HashMap::new();
+        chrom_map.insert("chr1".to_string(), 1000);
+
+        let vals1 = vec![
+            ("chr1".to_string(), 0, 100, 1.0),
+            ("chr1".to_string(), 100, 200, 5.0),
+        ];
+        let vals2 = vec![
+            ("chr1".to_string(), 0, 100, 3.0),
+            ("chr1".to_string(), 100, 200, 7.0),
+        ];
+
+        create_dummy_bigwig(&bw1, chrom_map.clone(), vals1)?;
+        create_dummy_bigwig(&bw2, chrom_map.clone(), vals2)?;
+
+        aggregate_bigwigs(&[bw1, bw2], &out, AggregationMode::Median, 100, None, None)?;
+
+        let mut reader = BigWigRead::open_file(out.to_str().unwrap())?;
+        let intervals: Vec<_> = reader
+            .get_interval("chr1", 0, 200)?
+            .collect::<Result<Vec<_>, _>>()?;
+        let a0 = intervals.iter().find(|i| i.start == 0).unwrap();
+        assert!((a0.value - 2.0).abs() < 1e-6);
+        let a1 = intervals.iter().find(|i| i.start == 100).unwrap();
+        assert!((a1.value - 6.0).abs() < 1e-6);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_aggregate_bigwigs_with_pseudocount() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let bw = dir.path().join("pc.bw");
+        let out = dir.path().join("out_pc.bw");
+
+        let mut chrom_map = HashMap::new();
+        chrom_map.insert("chr1".to_string(), 1000);
+
+        let vals = vec![("chr1".to_string(), 0, 100, 0.0f32)];
+        create_dummy_bigwig(&bw, chrom_map.clone(), vals)?;
+
+        aggregate_bigwigs(&[bw], &out, AggregationMode::Mean, 100, None, Some(1.0))?;
+
+        let mut reader = BigWigRead::open_file(out.to_str().unwrap())?;
+        let intervals: Vec<_> = reader
+            .get_interval("chr1", 0, 100)?
+            .collect::<Result<Vec<_>, _>>()?;
+        let v = intervals.iter().find(|i| i.start == 0).unwrap();
+        assert!((v.value - 1.0).abs() < 1e-6);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_collapse_adjacent_bins_within_epsilon() -> Result<()> {
+        // Scores that differ by less than eps should be collapsed
+        let df = DataFrame::new(vec![
+            Column::new("chrom".into(), &["chr1", "chr1", "chr1"]),
+            Column::new("start".into(), &[0i64, 10, 20]),
+            Column::new("end".into(), &[10i64, 20, 30]),
+            Column::new("score".into(), &[1.0f64, 1.0000004, 1.000002]),
+        ])?;
+
+        let collapsed = crate::bedgraph_utils::collapse_adjacent_bins(df)?;
+        let rows = df_rows(&collapsed)?;
+        // First two should collapse, third remain separate
+        let expected = vec![
+            ("chr1".to_string(), 0, 20, 1.0),
+            ("chr1".to_string(), 20, 30, 1.000002),
+        ];
+        assert_eq!(rows, expected);
         Ok(())
     }
 }
