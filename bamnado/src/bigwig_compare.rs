@@ -344,7 +344,7 @@ where
             for bin_idx in 0..n_bins {
                 let start = bin_idx * bin_size as usize;
                 let end = std::cmp::min((bin_idx + 1) * bin_size as usize, chromosome_length);
-                
+
                 // Skip bins that would start at or beyond the chromosome end
                 if start >= chromosome_length {
                     continue;
