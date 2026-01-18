@@ -221,10 +221,6 @@ enum Commands {
         #[arg(short = 's', long, default_value = "50")]
         bin_size: u32,
 
-        /// Chunk size for processing
-        #[arg(long)]
-        chunk_size: Option<usize>,
-
         /// Pseudocount value to add to all values
         #[arg(long)]
         pseudocount: Option<f64>,
@@ -694,7 +690,7 @@ fn main() -> Result<()> {
             output,
             comparison,
             bin_size,
-            chunk_size,
+            chunk_size: _,
             pseudocount,
         } => {
             bamnado::bigwig_compare::compare_bigwigs(
@@ -703,7 +699,6 @@ fn main() -> Result<()> {
                 output,
                 comparison.clone(),
                 *bin_size,
-                *chunk_size,
                 *pseudocount,
             )
             .context("Failed to compare BigWig files")?;
@@ -719,7 +714,6 @@ fn main() -> Result<()> {
             output,
             method,
             bin_size,
-            chunk_size,
             pseudocount,
         } => {
             if bigwigs.is_empty() {
@@ -731,7 +725,6 @@ fn main() -> Result<()> {
                 output,
                 method.clone(),
                 *bin_size,
-                *chunk_size,
                 *pseudocount,
             )
             .context("Failed to aggregate BigWig files")?;
