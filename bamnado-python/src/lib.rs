@@ -44,19 +44,31 @@ mod _bamnado {
     ///     filter_tag (str | None): Two-character SAM tag name to filter on (e.g. ``"CB"``). Default: None.
     ///     filter_tag_value (str | None): Required string value for *filter_tag*. Default: None.
     #[pyclass(from_py_object)]
-    #[derive(Clone)]
+    #[derive(Debug, Clone)]
     pub struct ReadFilter {
+        #[pyo3(get, set)]
         pub min_mapq: u8,
+        #[pyo3(get, set)]
         pub proper_pair: bool,
+        #[pyo3(get, set)]
         pub min_length: u32,
+        #[pyo3(get, set)]
         pub max_length: u32,
+        #[pyo3(get, set)]
         pub strand: String,
+        #[pyo3(get, set)]
         pub min_fragment_length: Option<u32>,
+        #[pyo3(get, set)]
         pub max_fragment_length: Option<u32>,
+        #[pyo3(get, set)]
         pub blacklist_bed: Option<String>,
+        #[pyo3(get, set)]
         pub whitelisted_barcodes: Option<Vec<String>>,
+        #[pyo3(get, set)]
         pub read_group: Option<String>,
+        #[pyo3(get, set)]
         pub filter_tag: Option<String>,
+        #[pyo3(get, set)]
         pub filter_tag_value: Option<String>,
     }
 
@@ -137,6 +149,14 @@ mod _bamnado {
                 self.filter_tag,
                 self.filter_tag_value,
             )
+        }
+
+        fn __str__(&self) -> String {
+            self.__repr__()
+        }
+
+        fn __copy__(&self) -> Self {
+            self.clone()
         }
     }
 
