@@ -372,6 +372,8 @@ fn create_filter_from_options(
         whitelisted_barcodes,
         filter_options.filter_tag.clone(),
         filter_options.filter_tag_value.clone(),
+        None,
+        None,
     ))
 }
 
@@ -538,6 +540,8 @@ fn main() -> Result<()> {
                     bam_barcodes,
                     filter_options.filter_tag.clone(),
                     filter_options.filter_tag_value.clone(),
+                    None,
+                    None,
                 );
 
                 // Create pileup

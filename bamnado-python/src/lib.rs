@@ -8,9 +8,10 @@
 //! *   `get_signal_for_chromosome`: Calculates coverage signal for a chromosome.
 
 use bamnado::{bam_utils, coverage_analysis, read_filter::BamReadFilter, signal_normalization};
+use bio_types::strand::Strand;
 use ndarray::prelude::*;
 use numpy::{PyArray1, prelude::*};
-use pyo3::exceptions::{PyKeyError, PyRuntimeError};
+use pyo3::exceptions::{PyKeyError, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 
 fn anyhow_to_pyerr(err: anyhow::Error) -> PyErr {
@@ -33,6 +34,9 @@ mod _bamnado {
     ///     scale_factor (float): Factor to scale the signal by.
     ///     use_fragment (bool): Whether to use fragment length for coverage (True) or just read start (False).
     ///     ignore_scaffold_chromosomes (bool): Whether to ignore scaffold chromosomes during analysis.
+    ///     strand (str, optional): Strand to include: "forward", "reverse", or "both" (default).
+    ///     min_fragment_length (int, optional): Minimum fragment (insert) length to include.
+    ///     max_fragment_length (int, optional): Maximum fragment (insert) length to include.
     ///
     /// Returns:
     ///     numpy.ndarray: A 1D numpy array of floats representing the signal across the chromosome.
@@ -40,10 +44,10 @@ mod _bamnado {
     /// Raises:
     ///     RuntimeError: If there is an error reading the BAM file or processing the data.
     ///     KeyError: If the specified chromosome is not found in the BAM file.
+    ///     ValueError: If an invalid strand value is provided.
+    #[allow(clippy::too_many_arguments)]
     #[pyfunction]
-    #[pyo3(
-        text_signature = "(bam_path, chromosome_name, bin_size, scale_factor, use_fragment, ignore_scaffold_chromosomes)"
-    )]
+    #[pyo3(signature = (bam_path, chromosome_name, bin_size, scale_factor, use_fragment, ignore_scaffold_chromosomes, strand=None, min_fragment_length=None, max_fragment_length=None))]
     fn get_signal_for_chromosome(
         py: Python,
         bam_path: &str,
@@ -52,7 +56,22 @@ mod _bamnado {
         scale_factor: f32,
         use_fragment: bool,
         ignore_scaffold_chromosomes: bool,
+        strand: Option<&str>,
+        min_fragment_length: Option<u32>,
+        max_fragment_length: Option<u32>,
     ) -> PyResult<Py<PyArray1<f32>>> {
+        let strand_filter = match strand {
+            Some("forward") | Some("fwd") | Some("+") => Strand::Forward,
+            Some("reverse") | Some("rev") | Some("-") => Strand::Reverse,
+            None | Some("both") | Some("unknown") => Strand::Unknown,
+            Some(other) => {
+                return Err(PyValueError::new_err(format!(
+                    "Invalid strand '{}'. Use 'forward', 'reverse', or 'both'.",
+                    other
+                )));
+            }
+        };
+
         let stats = bam_utils::BamStats::new(bam_path.into()).map_err(anyhow_to_pyerr)?;
         let chrom_size = match stats
             .chromsizes_ref_name()
@@ -68,13 +87,28 @@ mod _bamnado {
             }
         };
 
+        let filter = BamReadFilter::new(
+            strand_filter,
+            true,
+            Some(0),
+            Some(0),
+            Some(1000),
+            None,
+            None,
+            None,
+            None,
+            None,
+            min_fragment_length,
+            max_fragment_length,
+        );
+
         let bam_pileup = coverage_analysis::BamPileup::new(
             bam_path.into(),
             bin_size,
             signal_normalization::NormalizationMethod::Raw,
             scale_factor,
             use_fragment,
-            BamReadFilter::default(),
+            filter,
             true,
             ignore_scaffold_chromosomes,
             None,
