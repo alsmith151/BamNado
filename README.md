@@ -26,7 +26,7 @@ BamNado is useful in a range of workflows, including single-cell and Micro-Captu
 - Cross-platform support (Linux, macOS, Windows)
 - BAM → bedGraph / BigWig coverage generation
 - Fragment-aware and strand-specific pileups
-- Read filtering by mapping quality, length, tags, and barcodes
+- Read filtering by mapping quality, length, strand, fragment size, tags, and barcodes
 - BigWig comparison (subtraction, ratio, log-ratio)
 - BigWig aggregation (sum, mean, median, min, max)
 - `collapse-bedgraph` utility to merge adjacent bins with identical scores
@@ -38,8 +38,7 @@ BamNado is useful in a range of workflows, including single-cell and Micro-Captu
 
 ### Pre-built binaries (recommended)
 
-Download the appropriate binary from:
-https://github.com/alsmith151/BamNado/releases
+Download the appropriate binary from the [releases page](https://github.com/alsmith151/BamNado/releases).
 
 After downloading:
 
@@ -87,11 +86,25 @@ cargo build --release
 
 ---
 
+### Optional dependency: samtools
+
+`samtools` is not required but is **strongly recommended** if your BAM files have non-standard or incomplete headers (e.g. files produced by CellRanger). BamNado automatically falls back to `samtools view -H` to parse the header when the built-in parser fails. Without `samtools` on your `PATH`, BamNado will error on such files.
+
+Install via conda or your system package manager:
+
+```bash
+conda install -c bioconda samtools
+# or
+brew install samtools
+```
+
+---
+
 ## Python Interface
 
 BamNado provides Python bindings for selected high-performance operations and is available directly from PyPI.
 
-### Installation
+### Python Installation
 
 ```bash
 pip install bamnado
@@ -99,22 +112,76 @@ pip install bamnado
 uv pip install bamnado
 ```
 
+### ReadFilter
+
+All read filtering options are controlled through the `ReadFilter` class:
+
+| Parameter | Type | Default | Description |
+| --------- | ---- | ------- | ----------- |
+| `min_mapq` | `int` | `0` | Minimum mapping quality score |
+| `proper_pair` | `bool` | `True` | Keep only properly paired reads |
+| `min_length` | `int` | `0` | Minimum read length (bp) |
+| `max_length` | `int` | `1000` | Maximum read length (bp) |
+| `strand` | `str` | `"both"` | Strand to keep: `"forward"` / `"fwd"` / `"+"`, `"reverse"` / `"rev"` / `"-"`, or `"both"` |
+| `min_fragment_length` | `int \| None` | `None` | Minimum insert size / TLEN (bp); requires paired-end data |
+| `max_fragment_length` | `int \| None` | `None` | Maximum insert size / TLEN (bp); requires paired-end data |
+| `blacklist_bed` | `str \| None` | `None` | Path to a BED file of regions to exclude |
+| `whitelisted_barcodes` | `list[str] \| None` | `None` | Cell barcodes (CB tag) to include |
+| `read_group` | `str \| None` | `None` | Read group (RG tag) to keep |
+| `filter_tag` | `str \| None` | `None` | Two-character SAM tag to filter on (e.g. `"VP"`) |
+| `filter_tag_value` | `str \| None` | `None` | Required string value for `filter_tag` |
+
+A `ValueError` is raised if `min_fragment_length` or `max_fragment_length` is set on a single-end BAM file.
+
 ### Example
 
 ```python
 import bamnado
 import numpy as np
 
+# Basic coverage — default filter settings
 signal = bamnado.get_signal_for_chromosome(
     bam_path="input.bam",
     chromosome_name="chr1",
     bin_size=50,
     scale_factor=1.0,
     use_fragment=False,
-    ignore_scaffold_chromosomes=True
+    ignore_scaffold_chromosomes=True,
+)
+print(f"Mean coverage: {np.mean(signal):.3f}")
+
+# Forward-strand nucleosome-free region coverage (100–200 bp fragments)
+nfr_filter = bamnado.ReadFilter(
+    strand="forward",
+    min_fragment_length=100,
+    max_fragment_length=200,
+    min_mapq=20,
+)
+nfr_signal = bamnado.get_signal_for_chromosome(
+    bam_path="input.bam",
+    chromosome_name="chr1",
+    bin_size=10,
+    scale_factor=1.0,
+    use_fragment=True,
+    ignore_scaffold_chromosomes=True,
+    read_filter=nfr_filter,
 )
 
-print(f"Mean coverage: {np.mean(signal)}")
+# Tag-filtered coverage (e.g. MCC viewpoint)
+vp_filter = bamnado.ReadFilter(
+    filter_tag="VP",
+    filter_tag_value="BCL2",
+    min_mapq=30,
+)
+vp_signal = bamnado.get_signal_for_chromosome(
+    bam_path="input.bam",
+    chromosome_name="chr1",
+    bin_size=50,
+    scale_factor=1.0,
+    use_fragment=True,
+    ignore_scaffold_chromosomes=True,
+    read_filter=vp_filter,
+)
 ```
 
 ---
@@ -146,6 +213,28 @@ bamnado <command> --help
 
 ---
 
+## Read filtering
+
+All coverage commands share a common set of read filter flags:
+
+| Flag | Default | Description |
+| ---- | ------- | ----------- |
+| `--strand` | `both` | Include only `forward`, `reverse`, or `both` strands |
+| `--proper-pair` | off | Keep only properly-paired reads |
+| `--min-mapq` | 20 | Minimum mapping quality |
+| `--min-length` | 20 | Minimum read sequence length (bp) |
+| `--max-length` | 1000 | Maximum read sequence length (bp) |
+| `--min-fragment-length` | — | Minimum insert size / TLEN (bp); requires paired-end data |
+| `--max-fragment-length` | — | Maximum insert size / TLEN (bp); requires paired-end data |
+| `--blacklisted-locations` | — | BED file of regions to exclude |
+| `--whitelisted-barcodes` | — | Text file of cell barcodes to keep (one per line) |
+| `--read-group` | — | Keep only reads belonging to this read group |
+| `--filter-tag` / `--filter-tag-value` | — | Keep reads where SAM tag equals the given value |
+
+Fragment length filtering operates on the SAM `TLEN` field and is only meaningful for paired-end BAMs. BamNado will return an error if these flags are used with a single-end file.
+
+---
+
 ## Example: BAM coverage
 
 ```bash
@@ -158,6 +247,24 @@ bamnado bam-coverage \
   --use-fragment \
   --proper-pair \
   --min-mapq 30
+```
+
+---
+
+## Example: strand- and fragment-length-filtered coverage
+
+Useful for isolating nucleosome-free regions in ATAC-seq data:
+
+```bash
+bamnado bam-coverage \
+  --bam atac.bam \
+  --output nfr_forward.bw \
+  --bin-size 10 \
+  --use-fragment \
+  --strand forward \
+  --min-fragment-length 100 \
+  --max-fragment-length 200 \
+  --min-mapq 20
 ```
 
 ---

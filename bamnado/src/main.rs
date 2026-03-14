@@ -90,6 +90,14 @@ struct FilterOptions {
     /// Value for the filter tag (e.g., BCL2, TP, etc.)
     #[arg(long, required = false)]
     filter_tag_value: Option<String>,
+
+    /// Minimum fragment length (insert size / TLEN) in base pairs
+    #[arg(long, required = false)]
+    min_fragment_length: Option<u32>,
+
+    /// Maximum fragment length (insert size / TLEN) in base pairs
+    #[arg(long, required = false)]
+    max_fragment_length: Option<u32>,
 }
 
 // Common coverage options for both single and multi-BAM operations
@@ -359,6 +367,19 @@ fn create_filter_from_options(
         _ => None,
     };
 
+    // Fragment length filtering only makes sense for paired-end data.
+    if (filter_options.min_fragment_length.is_some()
+        || filter_options.max_fragment_length.is_some())
+        && let Some(stats) = bam_stats
+        && !stats.is_paired_end()?
+    {
+        return Err(anyhow::anyhow!(
+            "Fragment length filtering (--min-fragment-length / --max-fragment-length) \
+                     requires paired-end reads, but the BAM file does not appear to contain \
+                     paired-end data."
+        ));
+    }
+
     println!("Blacklisted locations: {blacklisted_locations:?}");
 
     Ok(bamnado::read_filter::BamReadFilter::new(
@@ -372,6 +393,8 @@ fn create_filter_from_options(
         whitelisted_barcodes,
         filter_options.filter_tag.clone(),
         filter_options.filter_tag_value.clone(),
+        filter_options.min_fragment_length,
+        filter_options.max_fragment_length,
     ))
 }
 
@@ -538,6 +561,8 @@ fn main() -> Result<()> {
                     bam_barcodes,
                     filter_options.filter_tag.clone(),
                     filter_options.filter_tag_value.clone(),
+                    filter_options.min_fragment_length,
+                    filter_options.max_fragment_length,
                 );
 
                 // Create pileup
