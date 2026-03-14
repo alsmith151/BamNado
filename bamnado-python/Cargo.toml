@@ -20,4 +20,5 @@ numpy = "0.28.0"
 bamnado = { path = "../bamnado" }
 anyhow = "1.0.98"
 ndarray = "0.17.1"
+ahash = "0.8.12"
 bio-types = "1.0.1"

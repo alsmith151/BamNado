@@ -35,23 +35,32 @@ BamNado/
 ## Python API
 
 ```python
-from bamnado import get_signal_for_chromosome
+from bamnado import ReadFilter, get_signal_for_chromosome
+
+# All filter options are bundled in ReadFilter
+rf = ReadFilter(
+    min_mapq=20,
+    strand="forward",           # "forward"/"fwd"/"+", "reverse"/"rev"/"-", "both" (default)
+    min_fragment_length=100,    # insert-size filter (bp); requires paired-end data
+    max_fragment_length=200,
+    blacklist_bed="blacklist.bed",
+    whitelisted_barcodes=["ACGT-1", "TTGA-1"],
+    read_group="RG1",
+    filter_tag="VP",
+    filter_tag_value="BCL2",
+)
 
 signal = get_signal_for_chromosome(
     bam_path="sample.bam",
     chromosome_name="chr1",
     bin_size=50,
     scale_factor=1.0,
-    use_fragment=True,          # True = fragment/insert coverage, False = read coverage
+    use_fragment=True,
     ignore_scaffold_chromosomes=True,
-    strand="forward",           # "forward" | "reverse" | "both" (default)
-    min_fragment_length=100,    # optional insert-size filter (bp)
-    max_fragment_length=200,    # optional insert-size filter (bp)
+    read_filter=rf,             # optional; None uses BamReadFilter::default()
 )
 # Returns: numpy float32 array, length = chromosome size
 ```
-
-Accepted `strand` values: `"forward"` / `"fwd"` / `"+"`, `"reverse"` / `"rev"` / `"-"`, `None` / `"both"` / `"unknown"`.
 
 ## CLI Filter Flags
 

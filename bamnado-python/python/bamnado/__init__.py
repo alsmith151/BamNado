@@ -1,3 +1,3 @@
-from ._bamnado import get_signal_for_chromosome, __version__
+from ._bamnado import ReadFilter, get_signal_for_chromosome, __version__
 
-__all__ = ["get_signal_for_chromosome", "__version__"]
+__all__ = ["ReadFilter", "get_signal_for_chromosome", "__version__"]

@@ -112,13 +112,34 @@ pip install bamnado
 uv pip install bamnado
 ```
 
+### ReadFilter
+
+All read filtering options are controlled through the `ReadFilter` class:
+
+| Parameter | Type | Default | Description |
+| --------- | ---- | ------- | ----------- |
+| `min_mapq` | `int` | `0` | Minimum mapping quality score |
+| `proper_pair` | `bool` | `True` | Keep only properly paired reads |
+| `min_length` | `int` | `0` | Minimum read length (bp) |
+| `max_length` | `int` | `1000` | Maximum read length (bp) |
+| `strand` | `str` | `"both"` | Strand to keep: `"forward"` / `"fwd"` / `"+"`, `"reverse"` / `"rev"` / `"-"`, or `"both"` |
+| `min_fragment_length` | `int \| None` | `None` | Minimum insert size / TLEN (bp); requires paired-end data |
+| `max_fragment_length` | `int \| None` | `None` | Maximum insert size / TLEN (bp); requires paired-end data |
+| `blacklist_bed` | `str \| None` | `None` | Path to a BED file of regions to exclude |
+| `whitelisted_barcodes` | `list[str] \| None` | `None` | Cell barcodes (CB tag) to include |
+| `read_group` | `str \| None` | `None` | Read group (RG tag) to keep |
+| `filter_tag` | `str \| None` | `None` | Two-character SAM tag to filter on (e.g. `"VP"`) |
+| `filter_tag_value` | `str \| None` | `None` | Required string value for `filter_tag` |
+
+A `ValueError` is raised if `min_fragment_length` or `max_fragment_length` is set on a single-end BAM file.
+
 ### Example
 
 ```python
 import bamnado
 import numpy as np
 
-# Basic coverage
+# Basic coverage — default filter settings
 signal = bamnado.get_signal_for_chromosome(
     bam_path="input.bam",
     chromosome_name="chr1",
@@ -127,8 +148,15 @@ signal = bamnado.get_signal_for_chromosome(
     use_fragment=False,
     ignore_scaffold_chromosomes=True,
 )
+print(f"Mean coverage: {np.mean(signal):.3f}")
 
-# Forward-strand fragment coverage, nucleosome-free region size range
+# Forward-strand nucleosome-free region coverage (100–200 bp fragments)
+nfr_filter = bamnado.ReadFilter(
+    strand="forward",
+    min_fragment_length=100,
+    max_fragment_length=200,
+    min_mapq=20,
+)
 nfr_signal = bamnado.get_signal_for_chromosome(
     bam_path="input.bam",
     chromosome_name="chr1",
@@ -136,15 +164,25 @@ nfr_signal = bamnado.get_signal_for_chromosome(
     scale_factor=1.0,
     use_fragment=True,
     ignore_scaffold_chromosomes=True,
-    strand="forward",
-    min_fragment_length=100,
-    max_fragment_length=200,
+    read_filter=nfr_filter,
 )
 
-print(f"Mean coverage: {np.mean(signal)}")
+# Tag-filtered coverage (e.g. MCC viewpoint)
+vp_filter = bamnado.ReadFilter(
+    filter_tag="VP",
+    filter_tag_value="BCL2",
+    min_mapq=30,
+)
+vp_signal = bamnado.get_signal_for_chromosome(
+    bam_path="input.bam",
+    chromosome_name="chr1",
+    bin_size=50,
+    scale_factor=1.0,
+    use_fragment=True,
+    ignore_scaffold_chromosomes=True,
+    read_filter=vp_filter,
+)
 ```
-
-`strand` accepts `"forward"`, `"reverse"`, or `"both"` (default). `min_fragment_length` and `max_fragment_length` filter by insert size (TLEN) and require paired-end data — a `ValueError` is raised if the BAM is single-end.
 
 ---
 
