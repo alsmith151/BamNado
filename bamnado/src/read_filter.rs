@@ -166,6 +166,10 @@ pub struct BamReadFilter {
     filter_tag: Option<String>,
     // Value for the filter tag
     filter_tag_value: Option<String>,
+    // Minimum fragment length (template length / insert size)
+    min_fragment_length: Option<u32>,
+    // Maximum fragment length (template length / insert size)
+    max_fragment_length: Option<u32>,
     // Statistics for the filtering process
     stats: Arc<BamReadFilterStats>,
 }
@@ -232,6 +236,8 @@ impl Default for BamReadFilter {
             None,
             None,
             None,
+            None,
+            None,
         )
     }
 }
@@ -263,6 +269,8 @@ impl BamReadFilter {
         whitelisted_barcodes: Option<HashSet<String>>,
         filter_tag: Option<String>,
         filter_tag_value: Option<String>,
+        min_fragment_length: Option<u32>,
+        max_fragment_length: Option<u32>,
     ) -> Self {
         let min_mapq = min_mapq.unwrap_or(0);
         let min_length = min_length.unwrap_or(0);
@@ -279,6 +287,8 @@ impl BamReadFilter {
             read_group,
             filter_tag,
             filter_tag_value,
+            min_fragment_length,
+            max_fragment_length,
             stats: Arc::new(BamReadFilterStats::new()),
         }
     }
@@ -359,6 +369,26 @@ impl BamReadFilter {
         {
             self.stats.n_failed_length.fetch_add(1, Ordering::Relaxed);
             return Ok(false);
+        }
+
+        // Filter by fragment length (template length / insert size).
+        if self.min_fragment_length.is_some() || self.max_fragment_length.is_some() {
+            let tlen = alignment
+                .template_length()
+                .map_err(|e| anyhow::anyhow!(e))?
+                .unsigned_abs();
+            if let Some(min_flen) = self.min_fragment_length
+                && tlen < min_flen
+            {
+                self.stats.n_failed_length.fetch_add(1, Ordering::Relaxed);
+                return Ok(false);
+            }
+            if let Some(max_flen) = self.max_fragment_length
+                && tlen > max_flen
+            {
+                self.stats.n_failed_length.fetch_add(1, Ordering::Relaxed);
+                return Ok(false);
+            }
         }
 
         let header = header.expect("No header provided");

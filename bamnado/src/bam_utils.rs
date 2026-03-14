@@ -530,6 +530,30 @@ impl BamStats {
     pub fn n_total_reads(&self) -> u64 {
         self.n_reads
     }
+
+    /// Checks whether the BAM file contains paired-end reads by inspecting the first few records.
+    ///
+    /// Reads up to 1000 records; returns `true` as soon as one has the paired-end (segmented) flag
+    /// set, and `false` if none of the sampled records do.
+    pub fn is_paired_end(&self) -> Result<bool> {
+        let mut reader = bam::io::reader::Builder
+            .build_from_path(&self.file_path)
+            .context("Failed to open BAM file to check paired-end status")?;
+        let _header = reader.read_header().context("Failed to read BAM header")?;
+        for (i, record) in reader.records().enumerate() {
+            let record = match record {
+                Ok(r) => r,
+                Err(_) => break,
+            };
+            if record.flags().is_segmented() {
+                return Ok(true);
+            }
+            if i >= 1000 {
+                break;
+            }
+        }
+        Ok(false)
+    }
 }
 
 /// Supported output file types.
@@ -701,4 +725,31 @@ where
         }
     };
     Ok(header)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_bam() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("Failed to get workspace root")
+            .join("test/data/test.bam")
+    }
+
+    #[test]
+    fn test_is_paired_end_returns_true_for_paired_bam() {
+        let stats = BamStats::new(test_bam()).expect("Failed to create BamStats");
+        assert!(
+            stats.is_paired_end().expect("is_paired_end failed"),
+            "test.bam should be detected as paired-end"
+        );
+    }
+
+    #[test]
+    fn test_bam_stats_reads_are_nonzero() {
+        let stats = BamStats::new(test_bam()).expect("Failed to create BamStats");
+        assert!(stats.n_mapped() > 0, "Expected mapped reads in test.bam");
+    }
 }
