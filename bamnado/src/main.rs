@@ -367,6 +367,19 @@ fn create_filter_from_options(
         _ => None,
     };
 
+    // Fragment length filtering only makes sense for paired-end data.
+    if (filter_options.min_fragment_length.is_some()
+        || filter_options.max_fragment_length.is_some())
+        && let Some(stats) = bam_stats
+        && !stats.is_paired_end()?
+    {
+        return Err(anyhow::anyhow!(
+            "Fragment length filtering (--min-fragment-length / --max-fragment-length) \
+                     requires paired-end reads, but the BAM file does not appear to contain \
+                     paired-end data."
+        ));
+    }
+
     println!("Blacklisted locations: {blacklisted_locations:?}");
 
     Ok(bamnado::read_filter::BamReadFilter::new(

@@ -26,7 +26,7 @@ BamNado is useful in a range of workflows, including single-cell and Micro-Captu
 - Cross-platform support (Linux, macOS, Windows)
 - BAM → bedGraph / BigWig coverage generation
 - Fragment-aware and strand-specific pileups
-- Read filtering by mapping quality, length, tags, and barcodes
+- Read filtering by mapping quality, length, strand, fragment size, tags, and barcodes
 - BigWig comparison (subtraction, ratio, log-ratio)
 - BigWig aggregation (sum, mean, median, min, max)
 - `collapse-bedgraph` utility to merge adjacent bins with identical scores
@@ -38,8 +38,7 @@ BamNado is useful in a range of workflows, including single-cell and Micro-Captu
 
 ### Pre-built binaries (recommended)
 
-Download the appropriate binary from:
-https://github.com/alsmith151/BamNado/releases
+Download the appropriate binary from the [releases page](https://github.com/alsmith151/BamNado/releases).
 
 After downloading:
 
@@ -87,11 +86,25 @@ cargo build --release
 
 ---
 
+### Optional dependency: samtools
+
+`samtools` is not required but is **strongly recommended** if your BAM files have non-standard or incomplete headers (e.g. files produced by CellRanger). BamNado automatically falls back to `samtools view -H` to parse the header when the built-in parser fails. Without `samtools` on your `PATH`, BamNado will error on such files.
+
+Install via conda or your system package manager:
+
+```bash
+conda install -c bioconda samtools
+# or
+brew install samtools
+```
+
+---
+
 ## Python Interface
 
 BamNado provides Python bindings for selected high-performance operations and is available directly from PyPI.
 
-### Installation
+### Python Installation
 
 ```bash
 pip install bamnado
@@ -105,17 +118,33 @@ uv pip install bamnado
 import bamnado
 import numpy as np
 
+# Basic coverage
 signal = bamnado.get_signal_for_chromosome(
     bam_path="input.bam",
     chromosome_name="chr1",
     bin_size=50,
     scale_factor=1.0,
     use_fragment=False,
-    ignore_scaffold_chromosomes=True
+    ignore_scaffold_chromosomes=True,
+)
+
+# Forward-strand fragment coverage, nucleosome-free region size range
+nfr_signal = bamnado.get_signal_for_chromosome(
+    bam_path="input.bam",
+    chromosome_name="chr1",
+    bin_size=10,
+    scale_factor=1.0,
+    use_fragment=True,
+    ignore_scaffold_chromosomes=True,
+    strand="forward",
+    min_fragment_length=100,
+    max_fragment_length=200,
 )
 
 print(f"Mean coverage: {np.mean(signal)}")
 ```
+
+`strand` accepts `"forward"`, `"reverse"`, or `"both"` (default). `min_fragment_length` and `max_fragment_length` filter by insert size (TLEN) and require paired-end data — a `ValueError` is raised if the BAM is single-end.
 
 ---
 
@@ -146,6 +175,28 @@ bamnado <command> --help
 
 ---
 
+## Read filtering
+
+All coverage commands share a common set of read filter flags:
+
+| Flag | Default | Description |
+| ---- | ------- | ----------- |
+| `--strand` | `both` | Include only `forward`, `reverse`, or `both` strands |
+| `--proper-pair` | off | Keep only properly-paired reads |
+| `--min-mapq` | 20 | Minimum mapping quality |
+| `--min-length` | 20 | Minimum read sequence length (bp) |
+| `--max-length` | 1000 | Maximum read sequence length (bp) |
+| `--min-fragment-length` | — | Minimum insert size / TLEN (bp); requires paired-end data |
+| `--max-fragment-length` | — | Maximum insert size / TLEN (bp); requires paired-end data |
+| `--blacklisted-locations` | — | BED file of regions to exclude |
+| `--whitelisted-barcodes` | — | Text file of cell barcodes to keep (one per line) |
+| `--read-group` | — | Keep only reads belonging to this read group |
+| `--filter-tag` / `--filter-tag-value` | — | Keep reads where SAM tag equals the given value |
+
+Fragment length filtering operates on the SAM `TLEN` field and is only meaningful for paired-end BAMs. BamNado will return an error if these flags are used with a single-end file.
+
+---
+
 ## Example: BAM coverage
 
 ```bash
@@ -158,6 +209,24 @@ bamnado bam-coverage \
   --use-fragment \
   --proper-pair \
   --min-mapq 30
+```
+
+---
+
+## Example: strand- and fragment-length-filtered coverage
+
+Useful for isolating nucleosome-free regions in ATAC-seq data:
+
+```bash
+bamnado bam-coverage \
+  --bam atac.bam \
+  --output nfr_forward.bw \
+  --bin-size 10 \
+  --use-fragment \
+  --strand forward \
+  --min-fragment-length 100 \
+  --max-fragment-length 200 \
+  --min-mapq 20
 ```
 
 ---

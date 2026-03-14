@@ -73,6 +73,16 @@ mod _bamnado {
         };
 
         let stats = bam_utils::BamStats::new(bam_path.into()).map_err(anyhow_to_pyerr)?;
+
+        if (min_fragment_length.is_some() || max_fragment_length.is_some())
+            && !stats.is_paired_end().map_err(anyhow_to_pyerr)?
+        {
+            return Err(PyValueError::new_err(
+                "Fragment length filtering requires paired-end reads, but the BAM file \
+                     does not appear to contain paired-end data.",
+            ));
+        }
+
         let chrom_size = match stats
             .chromsizes_ref_name()
             .map_err(anyhow_to_pyerr)?

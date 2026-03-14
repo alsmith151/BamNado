@@ -726,3 +726,30 @@ where
     };
     Ok(header)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_bam() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("Failed to get workspace root")
+            .join("test/data/test.bam")
+    }
+
+    #[test]
+    fn test_is_paired_end_returns_true_for_paired_bam() {
+        let stats = BamStats::new(test_bam()).expect("Failed to create BamStats");
+        assert!(
+            stats.is_paired_end().expect("is_paired_end failed"),
+            "test.bam should be detected as paired-end"
+        );
+    }
+
+    #[test]
+    fn test_bam_stats_reads_are_nonzero() {
+        let stats = BamStats::new(test_bam()).expect("Failed to create BamStats");
+        assert!(stats.n_mapped() > 0, "Expected mapped reads in test.bam");
+    }
+}
