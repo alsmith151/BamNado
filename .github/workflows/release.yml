@@ -1,17 +1,11 @@
 name: Release
 
-# Primary trigger: go to Actions → Release → "Run workflow" → enter version
-# Secondary trigger: push a v* tag (must be on main HEAD)
+# Triggered automatically when a "Release v*" PR is merged into main.
+# To start a release: Actions → Prepare Release → Run workflow → enter version.
 on:
-  workflow_dispatch:
-    inputs:
-      version:
-        description: 'Release version — no v prefix (e.g. 0.5.0)'
-        required: true
-        type: string
-  push:
-    tags:
-      - 'v[0-9]+.*'
+  pull_request:
+    types: [closed]
+    branches: [main]
 
 permissions:
   contents: write
@@ -23,73 +17,39 @@ env:
   RUST_BACKTRACE: short
 
 # ────────────────────────────────────────────────────────────────────────────
-# 1. PREPARE — bump all version files, commit to main, create/update the tag
+# Gate: only run for merged PRs whose title starts with "Release v"
 # ────────────────────────────────────────────────────────────────────────────
 jobs:
-  prepare:
+
+  tag:
+    if: >
+      github.event.pull_request.merged == true &&
+      startsWith(github.event.pull_request.title, 'Release v')
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.meta.outputs.version }}
-      sha: ${{ steps.push.outputs.sha }}
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0
-          ref: main
-          # Use a PAT so the push can trigger downstream workflows if needed
-          token: ${{ secrets.GITHUB_TOKEN }}
+          ref: ${{ github.sha }}
 
-      - name: Resolve version
+      - name: Extract version and push tag
         id: meta
         run: |
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            VERSION="${{ inputs.version }}"
-          else
-            # Strip leading 'v' from tag name
-            VERSION="${GITHUB_REF_NAME#v}"
-          fi
-          # Basic semver sanity check
-          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+ ]]; then
-            echo "::error::Version '$VERSION' does not look like semver (X.Y.Z)"
-            exit 1
-          fi
+          TITLE="${{ github.event.pull_request.title }}"
+          VERSION="${TITLE#Release v}"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "Releasing version: $VERSION"
-
-      - name: Bump version in Cargo manifests and pyproject.toml
-        run: |
-          V="${{ steps.meta.outputs.version }}"
-          # Replace only the *first* `version = "..."` line in each Cargo.toml
-          sed -i "0,/^version =/s/^version = \".*\"/version = \"$V\"/" bamnado/Cargo.toml
-          sed -i "0,/^version =/s/^version = \".*\"/version = \"$V\"/" bamnado-python/Cargo.toml
-          # pyproject.toml: version is under [project], first occurrence is correct
-          sed -i "0,/^version =/s/^version = \".*\"/version = \"$V\"/" pyproject.toml
-          echo "All version files updated to $V"
-          grep '^version' bamnado/Cargo.toml bamnado-python/Cargo.toml pyproject.toml
-
-      - name: Commit, tag, and push
-        id: push
-        run: |
-          V="${{ steps.meta.outputs.version }}"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git config user.name "github-actions[bot]"
-          git add bamnado/Cargo.toml bamnado-python/Cargo.toml pyproject.toml
-          if git diff --staged --quiet; then
-            echo "Version files already at $V — nothing to commit"
-          else
-            git commit -m "chore: release v$V"
-          fi
-          # Create or force-update the tag so it always points to the bumped commit
-          git tag -f "v$V"
-          git push origin main
-          git push origin "v$V" --force
-          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          git tag "v$VERSION"
+          git push origin "v$VERSION"
+          echo "Tagged v$VERSION at $(git rev-parse HEAD)"
 
   # ────────────────────────────────────────────────────────────────────────
-  # 2a. BUILD — native CLI binaries for all platforms
+  # Native CLI binaries
   # ────────────────────────────────────────────────────────────────────────
   build:
-    needs: prepare
+    needs: tag
     strategy:
       fail-fast: false
       max-parallel: 4
@@ -129,7 +89,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ needs.prepare.outputs.sha }}
+          ref: ${{ github.sha }}
 
       - name: Ensure rustup (for act/local)
         if: runner.os == 'Linux'
@@ -155,7 +115,7 @@ jobs:
           cache-all-crates: "true"
           shared-key: "release"
 
-      - name: Install cross (Linux cross-compilation)
+      - name: Install cross (Linux)
         if: runner.os == 'Linux'
         run: cargo install cross --locked || true
         shell: bash
@@ -177,10 +137,10 @@ jobs:
           path: target/${{ matrix.target }}/release/bamnado${{ matrix.binary-suffix }}
 
   # ────────────────────────────────────────────────────────────────────────
-  # 2b. PYTHON WHEELS
+  # Python wheels
   # ────────────────────────────────────────────────────────────────────────
   python-build:
-    needs: prepare
+    needs: tag
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
@@ -194,7 +154,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ needs.prepare.outputs.sha }}
+          ref: ${{ github.sha }}
       - uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.target }}
@@ -207,15 +167,15 @@ jobs:
           path: dist
 
   # ────────────────────────────────────────────────────────────────────────
-  # 2c. PYTHON SDIST
+  # Python sdist
   # ────────────────────────────────────────────────────────────────────────
   python-sdist:
-    needs: prepare
+    needs: tag
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ needs.prepare.outputs.sha }}
+          ref: ${{ github.sha }}
       - uses: PyO3/maturin-action@v1
         with:
           command: sdist
@@ -226,15 +186,15 @@ jobs:
           path: dist
 
   # ────────────────────────────────────────────────────────────────────────
-  # 2d. RUST DOCS
+  # Rust API docs
   # ────────────────────────────────────────────────────────────────────────
   build-docs:
-    needs: prepare
+    needs: tag
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ needs.prepare.outputs.sha }}
+          ref: ${{ github.sha }}
       - uses: actions-rust-lang/setup-rust-toolchain@v1
       - run: cargo doc --no-deps --all-features
       - run: echo '<meta http-equiv="refresh" content="0; url=bamnado/index.html">' > target/doc/index.html
@@ -244,16 +204,16 @@ jobs:
           path: target/doc
 
   # ────────────────────────────────────────────────────────────────────────
-  # 3. PUBLISH — crates.io, PyPI, GitHub Pages, GitHub Release
+  # Publish to crates.io, PyPI, GitHub Pages + create GitHub Release
   # ────────────────────────────────────────────────────────────────────────
   release:
     name: Publish & Release
     runs-on: ubuntu-latest
-    needs: [prepare, build, python-build, python-sdist, build-docs]
+    needs: [tag, build, python-build, python-sdist, build-docs]
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ needs.prepare.outputs.sha }}
+          ref: ${{ github.sha }}
 
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
@@ -293,13 +253,13 @@ jobs:
           find artifacts -name "bamnado*" -not -path "*/wheels-*" -type f | while read file; do
             DIR=$(basename "$(dirname "$file")")
             case "$DIR" in
-              bamnado-linux-x86_64)      cp "$file" release-assets/bamnado-linux-x86_64 ;;
-              bamnado-linux-x86_64-musl) cp "$file" release-assets/bamnado-linux-x86_64-musl ;;
-              bamnado-linux-aarch64)     cp "$file" release-assets/bamnado-linux-aarch64 ;;
-              bamnado-linux-aarch64-musl)cp "$file" release-assets/bamnado-linux-aarch64-musl ;;
-              bamnado-macos-aarch64)     cp "$file" release-assets/bamnado-macos-aarch64 ;;
-              bamnado-macos-x86_64)      cp "$file" release-assets/bamnado-macos-x86_64 ;;
-              bamnado-windows-x86_64)    cp "$file" release-assets/bamnado-windows-x86_64.exe ;;
+              bamnado-linux-x86_64)       cp "$file" release-assets/bamnado-linux-x86_64 ;;
+              bamnado-linux-x86_64-musl)  cp "$file" release-assets/bamnado-linux-x86_64-musl ;;
+              bamnado-linux-aarch64)      cp "$file" release-assets/bamnado-linux-aarch64 ;;
+              bamnado-linux-aarch64-musl) cp "$file" release-assets/bamnado-linux-aarch64-musl ;;
+              bamnado-macos-aarch64)      cp "$file" release-assets/bamnado-macos-aarch64 ;;
+              bamnado-macos-x86_64)       cp "$file" release-assets/bamnado-macos-x86_64 ;;
+              bamnado-windows-x86_64)     cp "$file" release-assets/bamnado-windows-x86_64.exe ;;
             esac
           done
           find artifacts -name "*.whl" -o -name "*.tar.gz" | xargs -I{} cp {} release-assets/
@@ -308,7 +268,7 @@ jobs:
 
       - uses: softprops/action-gh-release@v1
         with:
-          tag_name: v${{ needs.prepare.outputs.version }}
+          tag_name: v${{ needs.tag.outputs.version }}
           files: release-assets/*
           draft: false
           prerelease: false
