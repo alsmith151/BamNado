@@ -46,17 +46,29 @@ mod _bamnado {
     #[pyclass(from_py_object)]
     #[derive(Clone)]
     pub struct ReadFilter {
+        #[pyo3(get, set)]
         pub min_mapq: u8,
+        #[pyo3(get, set)]
         pub proper_pair: bool,
+        #[pyo3(get, set)]
         pub min_length: u32,
+        #[pyo3(get, set)]
         pub max_length: u32,
+        #[pyo3(get, set)]
         pub strand: String,
+        #[pyo3(get, set)]
         pub min_fragment_length: Option<u32>,
+        #[pyo3(get, set)]
         pub max_fragment_length: Option<u32>,
+        #[pyo3(get, set)]
         pub blacklist_bed: Option<String>,
+        #[pyo3(get, set)]
         pub whitelisted_barcodes: Option<Vec<String>>,
+        #[pyo3(get, set)]
         pub read_group: Option<String>,
+        #[pyo3(get, set)]
         pub filter_tag: Option<String>,
+        #[pyo3(get, set)]
         pub filter_tag_value: Option<String>,
     }
 
