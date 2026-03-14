@@ -1,0 +1,47 @@
+name: Prepare Release
+
+# Usage: Actions → Prepare Release → Run workflow → enter version (e.g. 0.5.0)
+# This creates a release branch + PR. Merging the PR triggers the release workflow.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version — no v prefix (e.g. 0.5.0)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  create-pr:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Bump version files and push branch
+        run: |
+          V="${{ inputs.version }}"
+          git checkout -b "release/v$V"
+
+          sed -i "0,/^version =/s/^version = \".*\"/version = \"$V\"/" bamnado/Cargo.toml
+          sed -i "0,/^version =/s/^version = \".*\"/version = \"$V\"/" bamnado-python/Cargo.toml
+          sed -i "0,/^version =/s/^version = \".*\"/version = \"$V\"/" pyproject.toml
+
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          git add bamnado/Cargo.toml bamnado-python/Cargo.toml pyproject.toml
+          git commit -m "chore: release v$V"
+          git push --force-with-lease origin "release/v$V"
+
+      - name: Open pull request
+        run: |
+          V="${{ inputs.version }}"
+          gh pr create \
+            --title "Release v$V" \
+            --body "Automated version bump to v$V. Merging this PR will build and publish the release." \
+            --base main \
+            --head "release/v$V"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
