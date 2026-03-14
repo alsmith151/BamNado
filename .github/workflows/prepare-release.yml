@@ -33,7 +33,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git add bamnado/Cargo.toml bamnado-python/Cargo.toml pyproject.toml
           git commit -m "chore: release v$V"
-          git push origin "release/v$V"
+          git push --force-with-lease origin "release/v$V"
 
       - name: Open pull request
         run: |
