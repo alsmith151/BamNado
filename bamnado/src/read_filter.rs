@@ -44,6 +44,8 @@ pub struct BamReadFilterStats {
     n_incorrect_strand: AtomicU64,
     // Number of reads filtered by tag
     n_failed_tag_filter: AtomicU64,
+    // Number of reads filtered by fragment length (insert size / TLEN)
+    n_failed_fragment_length: AtomicU64,
 }
 
 impl Default for BamReadFilterStats {
@@ -65,6 +67,7 @@ impl BamReadFilterStats {
             n_not_in_read_group: AtomicU64::new(0),
             n_incorrect_strand: AtomicU64::new(0),
             n_failed_tag_filter: AtomicU64::new(0),
+            n_failed_fragment_length: AtomicU64::new(0),
         }
     }
 
@@ -80,6 +83,7 @@ impl BamReadFilterStats {
             n_not_in_read_group: self.n_not_in_read_group.load(Ordering::Relaxed),
             n_incorrect_strand: self.n_incorrect_strand.load(Ordering::Relaxed),
             n_failed_tag_filter: self.n_failed_tag_filter.load(Ordering::Relaxed),
+            n_failed_fragment_length: self.n_failed_fragment_length.load(Ordering::Relaxed),
         }
     }
 }
@@ -96,6 +100,7 @@ pub struct BamReadFilterStatsSnapshot {
     n_not_in_read_group: u64,
     n_incorrect_strand: u64,
     n_failed_tag_filter: u64,
+    n_failed_fragment_length: u64,
 }
 
 impl Display for BamReadFilterStatsSnapshot {
@@ -112,6 +117,11 @@ impl Display for BamReadFilterStatsSnapshot {
         writeln!(f, "Failed tag filter: {}", self.n_failed_tag_filter)?;
         writeln!(
             f,
+            "Failed fragment length: {}",
+            self.n_failed_fragment_length
+        )?;
+        writeln!(
+            f,
             "Filtered reads: {}",
             self.n_failed_proper_pair
                 + self.n_failed_mapq
@@ -121,6 +131,7 @@ impl Display for BamReadFilterStatsSnapshot {
                 + self.n_not_in_read_group
                 + self.n_incorrect_strand
                 + self.n_failed_tag_filter
+                + self.n_failed_fragment_length
         )
     }
 }
@@ -136,7 +147,58 @@ impl BamReadFilterStatsSnapshot {
                 + self.n_failed_barcode
                 + self.n_not_in_read_group
                 + self.n_incorrect_strand
-                + self.n_failed_tag_filter)
+                + self.n_failed_tag_filter
+                + self.n_failed_fragment_length)
+    }
+
+    /// Returns the total number of reads processed.
+    pub fn n_total(&self) -> u64 {
+        self.n_total
+    }
+
+    /// Returns the number of reads filtered by mapping quality.
+    pub fn n_failed_mapq(&self) -> u64 {
+        self.n_failed_mapq
+    }
+
+    /// Returns the number of reads filtered by length.
+    pub fn n_failed_length(&self) -> u64 {
+        self.n_failed_length
+    }
+
+    /// Returns the number of reads filtered by incorrect strand.
+    pub fn n_incorrect_strand(&self) -> u64 {
+        self.n_incorrect_strand
+    }
+
+    /// Returns the number of reads filtered by proper pair criterion.
+    pub fn n_failed_proper_pair(&self) -> u64 {
+        self.n_failed_proper_pair
+    }
+
+    /// Returns the number of reads filtered by blacklist.
+    pub fn n_failed_blacklist(&self) -> u64 {
+        self.n_failed_blacklist
+    }
+
+    /// Returns the number of reads filtered by barcode.
+    pub fn n_failed_barcode(&self) -> u64 {
+        self.n_failed_barcode
+    }
+
+    /// Returns the number of reads not in the specified read group.
+    pub fn n_not_in_read_group(&self) -> u64 {
+        self.n_not_in_read_group
+    }
+
+    /// Returns the number of reads filtered by tag filter.
+    pub fn n_failed_tag_filter(&self) -> u64 {
+        self.n_failed_tag_filter
+    }
+
+    /// Returns the number of reads filtered by fragment length.
+    pub fn n_failed_fragment_length(&self) -> u64 {
+        self.n_failed_fragment_length
     }
 }
 
@@ -380,13 +442,17 @@ impl BamReadFilter {
             if let Some(min_flen) = self.min_fragment_length
                 && tlen < min_flen
             {
-                self.stats.n_failed_length.fetch_add(1, Ordering::Relaxed);
+                self.stats
+                    .n_failed_fragment_length
+                    .fetch_add(1, Ordering::Relaxed);
                 return Ok(false);
             }
             if let Some(max_flen) = self.max_fragment_length
                 && tlen > max_flen
             {
-                self.stats.n_failed_length.fetch_add(1, Ordering::Relaxed);
+                self.stats
+                    .n_failed_fragment_length
+                    .fetch_add(1, Ordering::Relaxed);
                 return Ok(false);
             }
         }
