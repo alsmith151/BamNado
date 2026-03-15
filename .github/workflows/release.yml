@@ -264,14 +264,31 @@ jobs:
         with:
           path: artifacts
 
+      - name: List artifacts
+        run: |
+          echo "Artifacts directory contents:"
+          find artifacts -type f \( -name "*.whl" -o -name "*.tar.gz" \) | sort
+
       - name: Publish Python package to PyPI
-        uses: PyO3/maturin-action@v1
+        run: |
+          pip install maturin
+
+          WHEELS=$(find artifacts -type f -name "*.whl")
+          SDIST=$(find artifacts -type f -name "*.tar.gz")
+
+          if [ -z "$WHEELS" ] && [ -z "$SDIST" ]; then
+            echo "❌ No wheels or sdist found in artifacts!"
+            exit 1
+          fi
+
+          FILES=$(find artifacts -type f \( -name "*.whl" -o -name "*.tar.gz" \))
+
+          echo "Publishing to PyPI:"
+          echo "$FILES" | xargs -I {} echo "  - {}"
+
+          maturin upload --non-interactive --skip-existing $FILES
         env:
           MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
-        with:
-          command: upload
-          args: --non-interactive --skip-existing artifacts/**/*.whl artifacts/**/*.tar.gz
-        continue-on-error: false
 
       - name: Deploy Rust docs to GitHub Pages
         uses: peaceiris/actions-gh-pages@v3
