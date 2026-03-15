@@ -9,6 +9,7 @@ on:
 
 permissions:
   contents: write
+  actions: write
 
 env:
   CARGO_TERM_COLOR: always
@@ -44,6 +45,14 @@ jobs:
           git tag "v$VERSION"
           git push origin "v$VERSION"
           echo "Tagged v$VERSION at $(git rev-parse HEAD)"
+
+      - name: Trigger container build
+        run: |
+          gh workflow run container.yml \
+            --ref v${{ steps.meta.outputs.version }} \
+            --repo ${{ github.repository }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   # ────────────────────────────────────────────────────────────────────────
   # Native CLI binaries
