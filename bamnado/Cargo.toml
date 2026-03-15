@@ -1,6 +1,6 @@
 [package]
 name = "bamnado"
-version = "0.5.1"
+version = "v0.5.3"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 description = "Tools and utilities for manipulation of BAM files for unusual use cases. e.g. single cell, MCC"
