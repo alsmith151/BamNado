@@ -4,6 +4,12 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Git ref (tag or branch) to build'
+        required: false
+        type: string
 
 env:
   REGISTRY: ghcr.io
