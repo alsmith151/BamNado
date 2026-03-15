@@ -124,3 +124,8 @@ maturin build --release  # wheel
 - Pileup is parallelised with Rayon across genomic chunks; chunk size is auto-tuned from `BamStats`.
 - Fragment length filtering uses the SAM `TLEN` field; it is only meaningful for paired-end data. Filtering is applied before the fragment interval is computed, so it works correctly in both read and fragment coverage modes.
 - Strand filtering uses the SAM reverse-complement flag; applies to both fragment and read modes.
+
+
+#### Repo notes:
+
+- Main branch has protection, needs a PR to merge.
