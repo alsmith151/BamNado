@@ -1,6 +1,6 @@
 [package]
 name = "bamnado-python"
-version = "0.5.6"
+version = "0.5.7"
 edition = "2024"
 description = "Python extension wrapper for bamnado"
 license = "MIT OR Apache-2.0"
