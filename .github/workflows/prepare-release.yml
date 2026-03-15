@@ -29,6 +29,23 @@ jobs:
           sed -i "0,/^version =/s/^version = \".*\"/version = \"$V\"/" bamnado-python/Cargo.toml
           sed -i "0,/^version =/s/^version = \".*\"/version = \"$V\"/" pyproject.toml
 
+          # Verify all versions were updated correctly
+          BAMNADO_VERSION=$(grep "^version" bamnado/Cargo.toml | head -1 | cut -d'"' -f2)
+          BAMNADO_PY_VERSION=$(grep "^version" bamnado-python/Cargo.toml | head -1 | cut -d'"' -f2)
+          PYPROJECT_VERSION=$(grep "^version" pyproject.toml | head -1 | cut -d'"' -f2)
+
+          echo "Verifying version updates..."
+          echo "bamnado/Cargo.toml: $BAMNADO_VERSION (expected: $V)"
+          echo "bamnado-python/Cargo.toml: $BAMNADO_PY_VERSION (expected: $V)"
+          echo "pyproject.toml: $PYPROJECT_VERSION (expected: $V)"
+
+          if [ "$BAMNADO_VERSION" != "$V" ] || [ "$BAMNADO_PY_VERSION" != "$V" ] || [ "$PYPROJECT_VERSION" != "$V" ]; then
+            echo "❌ Version update failed! All versions must be set to $V"
+            exit 1
+          fi
+
+          echo "✅ All versions successfully updated to v$V"
+
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git config user.name "github-actions[bot]"
           git add bamnado/Cargo.toml bamnado-python/Cargo.toml pyproject.toml
