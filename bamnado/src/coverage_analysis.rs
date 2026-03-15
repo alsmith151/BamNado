@@ -70,6 +70,7 @@ fn write_bedgraph(
 /// This function reduces the number of rows by merging adjacent bins with the
 /// same score, which can make the output bedGraph file smaller.
 fn collapse_equal_bins(df: DataFrame, score_columns: Option<Vec<PlSmallStr>>) -> Result<DataFrame> {
+    let original_rows = df.height();
     let mut df = df.sort(["chrom", "start"], Default::default())?;
     let shifted_chromosome = df.column("chrom")?.shift(1);
     let same_chrom = df.column("chrom")?.equal(&shifted_chromosome)?;
@@ -108,6 +109,13 @@ fn collapse_equal_bins(df: DataFrame, score_columns: Option<Vec<PlSmallStr>>) ->
             col("score").sum(),
         ])
         .collect()?;
+
+    let collapsed_rows = df.height();
+    let reduction_pct = ((original_rows - collapsed_rows) as f64 / original_rows as f64) * 100.0;
+    debug!(
+        "Collapsed bins: {} rows → {} rows ({:.1}% reduction)",
+        original_rows, collapsed_rows, reduction_pct
+    );
 
     Ok(df)
 }
@@ -148,6 +156,61 @@ impl Display for BamPileup {
 }
 
 impl BamPileup {
+    /// Log detailed filtering statistics.
+    fn log_filter_stats(&self, prefix: &str) {
+        let stats = self.filter.stats();
+        debug!(
+            "{} filter stats: total_reads={}, reads_passing={}, filtered={}, pass_rate={:.2}%",
+            prefix,
+            stats.n_total(),
+            stats.n_reads_after_filtering(),
+            stats
+                .n_total()
+                .saturating_sub(stats.n_reads_after_filtering()),
+            if stats.n_total() > 0 {
+                (stats.n_reads_after_filtering() as f64 / stats.n_total() as f64) * 100.0
+            } else {
+                0.0
+            }
+        );
+        if stats.n_failed_mapq() > 0 {
+            debug!("  - Filtered by MAPQ: {}", stats.n_failed_mapq());
+        }
+        if stats.n_failed_length() > 0 {
+            debug!("  - Filtered by length: {}", stats.n_failed_length());
+        }
+        if stats.n_incorrect_strand() > 0 {
+            debug!("  - Filtered by strand: {}", stats.n_incorrect_strand());
+        }
+        if stats.n_failed_proper_pair() > 0 {
+            debug!(
+                "  - Filtered by proper pair: {}",
+                stats.n_failed_proper_pair()
+            );
+        }
+        if stats.n_failed_blacklist() > 0 {
+            debug!("  - Filtered by blacklist: {}", stats.n_failed_blacklist());
+        }
+        if stats.n_failed_barcode() > 0 {
+            debug!("  - Filtered by barcode: {}", stats.n_failed_barcode());
+        }
+        if stats.n_not_in_read_group() > 0 {
+            debug!(
+                "  - Filtered by read group: {}",
+                stats.n_not_in_read_group()
+            );
+        }
+        if stats.n_failed_tag_filter() > 0 {
+            debug!("  - Filtered by tag: {}", stats.n_failed_tag_filter());
+        }
+        if stats.n_failed_fragment_length() > 0 {
+            debug!(
+                "  - Filtered by fragment length: {}",
+                stats.n_failed_fragment_length()
+            );
+        }
+    }
+
     /// Create a new [`BamPileup`].
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -292,6 +355,15 @@ impl BamPileup {
                 acc.append(&mut vec);
                 acc
             });
+
+        let interval_count = pileup.len();
+        let total_coverage: u64 = pileup.iter().map(|iv| (iv.stop - iv.start) as u64).sum();
+        info!(
+            "Chromosome {} pileup complete: {} intervals, {} bp coverage",
+            chrom, interval_count, total_coverage
+        );
+        self.log_filter_stats(&format!("Chromosome {}", chrom));
+
         Ok(pileup)
     }
 
@@ -417,8 +489,20 @@ impl BamPileup {
                 acc
             });
 
-        info!("Pileup complete");
-        info!("Read filtering statistics: {}", self.filter.stats());
+        let n_chromosomes = pileup.len();
+        let total_intervals: usize = pileup.values().map(|ivs| ivs.len()).sum();
+        let total_bp_covered: u64 = pileup
+            .values()
+            .flat_map(|ivs| ivs.iter())
+            .map(|iv| (iv.stop - iv.start) as u64)
+            .sum();
+
+        info!(
+            "Pileup complete: {} chromosomes, {} total intervals, {} bp coverage",
+            n_chromosomes, total_intervals, total_bp_covered
+        );
+        info!("Overall filtering statistics: {}", self.filter.stats());
+        self.log_filter_stats("Overall");
 
         Ok(pileup)
     }
@@ -467,14 +551,24 @@ impl BamPileup {
             Column::new("end".into(), ends),
             Column::new("score".into(), scores),
         ])?;
+
+        let row_count = df.height();
+        debug!(
+            "Pileup DataFrame created: {} intervals across all chromosomes",
+            row_count
+        );
         Ok(df)
     }
 
     /// Normalize the pileup signal using the provided normalization method.
     fn pileup_normalised(&self) -> Result<DataFrame> {
         let mut df = self.pileup_to_polars()?;
-        let norm_scores =
-            df.column("score")?.cast(&DataType::Float64)? * self.normalization_factor();
+        let norm_factor = self.normalization_factor();
+        debug!(
+            "Applying normalization (method: {:?}, factor: {:.6})",
+            self.norm_method, norm_factor
+        );
+        let norm_scores = df.column("score")?.cast(&DataType::Float64)? * norm_factor;
         df.with_column(norm_scores)?;
         Ok(df)
     }
@@ -487,7 +581,16 @@ impl BamPileup {
     pub fn to_bedgraph(&self, outfile: PathBuf) -> Result<()> {
         info!("Writing bedGraph file to {}", outfile.display());
         let df = self.pileup_normalised()?;
-        write_bedgraph(df, outfile, self.ignore_scaffold_chromosomes)?;
+        write_bedgraph(df, outfile.clone(), self.ignore_scaffold_chromosomes)?;
+
+        if outfile.exists() {
+            let file_size = std::fs::metadata(&outfile)?.len();
+            info!(
+                "bedGraph file written: {} ({:.2} MB)",
+                outfile.display(),
+                file_size as f64 / 1_000_000.0
+            );
+        }
         Ok(())
     }
 
@@ -534,8 +637,18 @@ impl BamPileup {
         // Clean up temporary files.
         std::fs::remove_file(bedgraph_path)?;
         std::fs::remove_file(chromsizes_path)?;
-        // Log success.
-        info!("BigWig file successfully written to {}", outfile.display());
+
+        // Log success with file size.
+        if outfile.exists() {
+            let file_size = std::fs::metadata(&outfile)?.len();
+            info!(
+                "BigWig file successfully written: {} ({:.2} MB)",
+                outfile.display(),
+                file_size as f64 / 1_000_000.0
+            );
+        } else {
+            info!("BigWig file written to {}", outfile.display());
+        }
         Ok(())
     }
 }

@@ -325,6 +325,47 @@ fn validate_bam_file(bam_path: &Path) -> Result<()> {
     Ok(())
 }
 
+fn log_active_filters(filter_options: &FilterOptions) {
+    info!("=== Active Filters ===");
+    info!("Strand: {}", filter_options.strand);
+    if filter_options.proper_pair {
+        info!("Proper pair: enabled");
+    }
+    info!("Min MAPQ: {}", filter_options.min_mapq);
+    info!(
+        "Read length: {} - {} bp",
+        filter_options.min_length, filter_options.max_length
+    );
+    if let Some(blacklist) = &filter_options.blacklisted_locations {
+        info!("Blacklist: {}", blacklist.display());
+    }
+    if let Some(whitelist) = &filter_options.whitelisted_barcodes {
+        info!("Whitelisted barcodes: {}", whitelist.display());
+    }
+    if let Some(rg) = &filter_options.read_group {
+        info!("Read group: {}", rg);
+    }
+    if let Some(tag) = &filter_options.filter_tag {
+        info!(
+            "Filter tag: {} = {}",
+            tag,
+            filter_options.filter_tag_value.as_deref().unwrap_or("*")
+        );
+    }
+    if filter_options.min_fragment_length.is_some() || filter_options.max_fragment_length.is_some()
+    {
+        info!(
+            "Fragment length: {} - {} bp",
+            filter_options
+                .min_fragment_length
+                .map_or(String::from("0"), |v| v.to_string()),
+            filter_options
+                .max_fragment_length
+                .map_or(String::from("∞"), |v| v.to_string())
+        );
+    }
+}
+
 fn create_filter_from_options(
     filter_options: &FilterOptions,
     bam_stats: Option<&bamnado::BamStats>,
@@ -440,6 +481,9 @@ fn main() -> Result<()> {
             let bam_stats =
                 bamnado::BamStats::new(bam.clone()).context("Failed to read BAM stats")?;
 
+            // Log active filters
+            log_active_filters(filter_options);
+
             // Create filter
             let filter = create_filter_from_options(filter_options, Some(&bam_stats))?;
 
@@ -504,6 +548,9 @@ fn main() -> Result<()> {
             for bam in bams {
                 validate_bam_file(bam)?;
             }
+
+            // Log active filters
+            log_active_filters(filter_options);
 
             // Determine output file
             let output = output.clone().unwrap_or_else(|| {
@@ -616,6 +663,9 @@ fn main() -> Result<()> {
             // Validate input BAM file
             validate_bam_file(input)?;
 
+            // Log active filters
+            log_active_filters(filter_options);
+
             // Create filter
             let _filter = create_filter_from_options(filter_options, None)?;
 
@@ -656,6 +706,9 @@ fn main() -> Result<()> {
             // Validate input BAM file
             validate_bam_file(input)?;
 
+            // Log active filters
+            log_active_filters(filter_options);
+
             // Create filter
             let filter = create_filter_from_options(filter_options, None)?;
 
@@ -684,6 +737,9 @@ fn main() -> Result<()> {
         } => {
             // Validate input BAM file
             validate_bam_file(input)?;
+
+            // Log active filters
+            log_active_filters(filter_options);
 
             // Create filter
             let filter = create_filter_from_options(filter_options, None)?;
