@@ -6,7 +6,7 @@
 //! It is useful for preprocessing BAM files before downstream analysis, ensuring that
 //! reads are correctly positioned and filtered.
 
-use crate::bam_utils::get_bam_header;
+use crate::bam_utils::{add_bamnado_program_group, get_bam_header};
 
 use crate::read_filter::BamReadFilter;
 use anyhow::Context;
@@ -63,6 +63,7 @@ impl BamModifier {
             Ok(header) => header,
             Err(_e) => get_bam_header(&filepath)?,
         };
+        let output_header = add_bamnado_program_group(&header)?;
 
         let index_path = self.filepath.with_extension("bam.bai");
         let index_file = File::open(&index_path).await?;
@@ -71,7 +72,7 @@ impl BamModifier {
 
         // Make writer
         let mut writer = AsyncWriter::new(File::create(outfile).await?);
-        writer.write_header(&header).await?;
+        writer.write_header(&output_header).await?;
 
         // Get the chromosome sizes
         let chromsizes = header
@@ -214,14 +215,14 @@ impl BamModifier {
                                 }
                             }
 
-                            writer.write_alignment_record(&header, &aln).await?;
+                            writer.write_alignment_record(&output_header, &aln).await?;
                         }
                     } else {
                         warn!("Skipping record with invalid alignment start: {record:?}");
                     }
                 } else {
                     // Write the record without TN5 shift
-                    writer.write_record(&header, &record).await?;
+                    writer.write_record(&output_header, &record).await?;
                 }
             }
         }

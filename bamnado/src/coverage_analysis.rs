@@ -9,6 +9,7 @@
 
 use std::fmt::{Display, Formatter, Result as FmtResult};
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
 use crate::bam_utils::{BamStats, Iv, get_bam_header, progress_bar};
 use crate::genomic_intervals::{IntervalMaker, Shift, Truncate};
@@ -18,16 +19,24 @@ use ahash::HashMap;
 use anyhow::{Context, Result};
 #[cfg(test)]
 use bigtools::BigWigRead;
-use bigtools::{DEFAULT_BLOCK_SIZE, DEFAULT_ITEMS_PER_SLOT};
+use bigtools::beddata::BedParserStreamingIterator;
+use bigtools::{BigWigWrite, Value};
 use indicatif::ParallelProgressIterator;
-use log::{debug, error, info};
+use log::{debug, info};
 use noodles::bam;
 use polars::lazy::dsl::col;
 use polars::prelude::*;
 use rayon::prelude::*;
 use regex::Regex;
 use rust_lapper::Lapper;
-use tempfile;
+
+/// Check if a chromosome name is a scaffold.
+fn is_scaffold(name: &str) -> bool {
+    static SCAFFOLD_REGEX: OnceLock<Regex> = OnceLock::new();
+    SCAFFOLD_REGEX
+        .get_or_init(|| Regex::new("(chrUn.*|.*alt|.*random)").unwrap())
+        .is_match(name)
+}
 
 /// Write a DataFrame as a bedGraph file (tab-separated, no header).
 fn write_bedgraph(
@@ -38,13 +47,12 @@ fn write_bedgraph(
     // If ignore_scaffold_chromosomes is true, filter out scaffold chromosomes
     let mut df = match ignore_scaffold_chromosomes {
         true => {
-            let pattern = Regex::new("(chrUn.*|.*alt|.*random)").unwrap();
             let mask = df
                 .column("chrom")?
                 .str()?
                 .iter()
                 .flatten()
-                .map(|s| !pattern.is_match(s))
+                .map(|s| !is_scaffold(s))
                 .collect::<BooleanChunked>();
             df.filter(&mask)?
         }
@@ -141,6 +149,8 @@ pub struct BamPileup {
     shift: Option<Shift>,
     // Optional truncation to apply to the pileup intervals.
     truncate: Option<Truncate>,
+    // Number of threads for tokio runtime in BigWig writer.
+    nthreads: u32,
 }
 
 impl Display for BamPileup {
@@ -224,6 +234,7 @@ impl BamPileup {
         ignore_scaffold_chromosomes: bool,
         shift: Option<Shift>,
         truncate: Option<Truncate>,
+        nthreads: Option<u32>,
     ) -> Self {
         Self {
             file_path,
@@ -236,6 +247,7 @@ impl BamPileup {
             ignore_scaffold_chromosomes,
             shift,
             truncate,
+            nthreads: nthreads.unwrap_or(6),
         }
     }
 
@@ -596,59 +608,127 @@ impl BamPileup {
 
     /// Write the normalized pileup as a BigWig file.
     ///
-    /// This function writes a temporary bedGraph file and converts it to BigWig.
+    /// Streams pileup intervals directly to BigWigWrite in BAM-header chromosome order.
+    /// Each chromosome's intervals are sorted by start position.
     ///
     /// # Arguments
     ///
     /// * `outfile` - The path to the output BigWig file.
     pub fn to_bigwig(&self, outfile: PathBuf) -> Result<()> {
         let bam_stats = BamStats::new(self.file_path.clone())?;
-        let chromsizes_file = tempfile::NamedTempFile::new()?;
-        let chromsizes_path = chromsizes_file.path();
-        bam_stats.write_chromsizes(chromsizes_path.to_path_buf())?;
+        let header = bam_stats.header();
 
-        let bedgraph_file = tempfile::NamedTempFile::new()?;
-        let bedgraph_path = bedgraph_file.path();
-        self.to_bedgraph(bedgraph_path.to_path_buf())?;
-
-        let args = bigtools::utils::cli::bedgraphtobigwig::BedGraphToBigWigArgs {
-            bedgraph: bedgraph_path.to_path_buf().to_string_lossy().to_string(),
-            chromsizes: chromsizes_path.to_path_buf().to_string_lossy().to_string(),
-            output: outfile.to_string_lossy().to_string(),
-            parallel: "auto".to_string(),
-            single_pass: true,
-            write_args: bigtools::utils::cli::BBIWriteArgs {
-                nthreads: 6,
-                nzooms: 10,
-                uncompressed: false,
-                sorted: "all".to_string(),
-                zooms: None,
-                block_size: DEFAULT_BLOCK_SIZE,
-                items_per_slot: DEFAULT_ITEMS_PER_SLOT,
-                inmemory: false,
-            },
-        };
-
-        let result = bigtools::utils::cli::bedgraphtobigwig::bedgraphtobigwig(args);
-        if let Err(e) = result {
-            error!("Error converting bedGraph to BigWig: {e}");
-            anyhow::bail!("Conversion to BigWig failed");
+        // Get all chromsizes and apply scaffold filter.
+        let all_chromsizes = bam_stats.chromsizes_ref_name()?;
+        let mut chrom_sizes_vec = Vec::new();
+        for (name, len) in all_chromsizes {
+            if self.ignore_scaffold_chromosomes && is_scaffold(&name) {
+                continue;
+            }
+            let len_u32 = u32::try_from(len).context(format!(
+                "Chromosome {} length {} exceeds u32::MAX",
+                name, len
+            ))?;
+            chrom_sizes_vec.push((name, len_u32));
         }
-        // Clean up temporary files.
-        std::fs::remove_file(bedgraph_path)?;
-        std::fs::remove_file(chromsizes_path)?;
+        let chrom_sizes: std::collections::HashMap<String, u32> =
+            chrom_sizes_vec.into_iter().collect();
 
-        // Log success with file size.
-        if outfile.exists() {
-            let file_size = std::fs::metadata(&outfile)?.len();
-            info!(
-                "BigWig file successfully written: {} ({:.2} MB)",
-                outfile.display(),
-                file_size as f64 / 1_000_000.0
-            );
-        } else {
-            info!("BigWig file written to {}", outfile.display());
+        // Get normalized pileup as DataFrame.
+        let mut df = self.pileup_normalised()?;
+
+        // Filter scaffold chromosomes if requested.
+        if self.ignore_scaffold_chromosomes {
+            let mask = df
+                .column("chrom")?
+                .str()?
+                .iter()
+                .flatten()
+                .map(|s| !is_scaffold(s))
+                .collect::<BooleanChunked>();
+            df = df.filter(&mask)?;
         }
+
+        // Build chrom_idx mapping: chrom name → BAM header position.
+        let chrom_idx: HashMap<String, u32> = header
+            .reference_sequences()
+            .iter()
+            .enumerate()
+            .map(|(i, (name, _))| (String::from_utf8_lossy(name).to_string(), i as u32))
+            .collect();
+
+        // Add chrom_idx column to DataFrame.
+        let chrom_idx_col = df
+            .column("chrom")?
+            .str()?
+            .iter()
+            .flatten()
+            .map(|s| {
+                chrom_idx
+                    .get(s)
+                    .copied()
+                    .ok_or_else(|| anyhow::anyhow!("Chromosome {} not in BAM header", s))
+            })
+            .collect::<Result<Vec<u32>>>()?;
+        df.with_column(Column::new("chrom_idx".into(), chrom_idx_col))?;
+
+        // Pre-cast start, end (u64 → u32) and score (f64 → f32) before sorting.
+        // Verify no overflow first.
+        let start_max = df.column("start")?.u64()?.max().unwrap_or(0);
+        let end_max = df.column("end")?.u64()?.max().unwrap_or(0);
+        let _start_max_u32 = u32::try_from(start_max).context("start position exceeds u32::MAX")?;
+        let _end_max_u32 = u32::try_from(end_max).context("end position exceeds u32::MAX")?;
+
+        df = df
+            .lazy()
+            .with_column(col("start").cast(DataType::UInt32))
+            .with_column(col("end").cast(DataType::UInt32))
+            .with_column(col("score").cast(DataType::Float32))
+            .collect()?;
+
+        // Sort by chrom_idx, then by start.
+        df = df.sort(["chrom_idx", "start"], SortMultipleOptions::default())?;
+
+        // Rechunk so column iterators are contiguous slices.
+        df.rechunk_mut();
+
+        // Get column slices.
+        let idx_slice = df.column("chrom_idx")?.u32()?.cont_slice()?;
+        let start_slice = df.column("start")?.u32()?.cont_slice()?;
+        let end_slice = df.column("end")?.u32()?.cont_slice()?;
+        let score_slice = df.column("score")?.f32()?.cont_slice()?;
+
+        // Build chrom_names indexed by BAM header position (for zero-alloc lookup in loop).
+        let mut chrom_names = vec!["".to_string(); chrom_idx.len()];
+        for (name, idx) in &chrom_idx {
+            chrom_names[*idx as usize] = name.clone();
+        }
+
+        // Create iterator from column slices: (chrom_name, Value).
+        let n_rows = df.height();
+        let iter = (0..n_rows).map(|i| {
+            let name: &str = chrom_names[idx_slice[i] as usize].as_str();
+            (
+                name,
+                Value {
+                    start: start_slice[i],
+                    end: end_slice[i],
+                    value: score_slice[i],
+                },
+            )
+        });
+
+        // Wrap in BedParserStreamingIterator.
+        let bed_iter = BedParserStreamingIterator::wrap_infallible_iter(iter, true);
+
+        // Create BigWigWrite and write.
+        let bw_writer = BigWigWrite::create_file(&outfile, chrom_sizes)?;
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(self.nthreads as usize)
+            .build()?;
+        bw_writer.write(bed_iter, runtime)?;
+
+        info!("BigWig file successfully written: {}", outfile.display());
         Ok(())
     }
 }
@@ -775,6 +855,7 @@ mod tests {
             false,
             None,
             None,
+            None,
         )
     }
 
@@ -797,6 +878,7 @@ mod tests {
             BamReadFilter::default(),
             true,
             false,
+            None,
             None,
             None,
         );
@@ -884,6 +966,7 @@ mod tests {
             false,
             None,
             None,
+            None,
         );
         let result = pileup.to_bigwig(output_path.clone());
         result.expect("Failed to create BigWig file");
@@ -916,6 +999,7 @@ mod tests {
             BamReadFilter::default(),
             true,
             false,
+            None,
             None,
             None,
         );
@@ -951,6 +1035,7 @@ mod tests {
             BamReadFilter::default(),
             false,
             false,
+            None,
             None,
             None,
         );

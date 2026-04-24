@@ -9,8 +9,7 @@
 //! *   Filtering reads during the splitting process.
 //! *   Asynchronous I/O for high performance.
 
-use crate::bam_utils::BamStats;
-use crate::bam_utils::get_bam_header;
+use crate::bam_utils::{BamStats, add_bamnado_program_group, get_bam_header};
 use crate::read_filter::BamReadFilter;
 use anyhow::Result;
 use crossbeam::channel::unbounded;
@@ -63,6 +62,7 @@ impl BamFilterer {
             Ok(header) => header,
             Err(_e) => get_bam_header(&filepath)?,
         };
+        let output_header = add_bamnado_program_group(&header)?;
 
         let index_path = self.filepath.with_extension("bam.bai");
         let index_file = File::open(&index_path).await?;
@@ -71,7 +71,7 @@ impl BamFilterer {
 
         // Make writer
         let mut writer = AsyncWriter::new(File::create(outfile).await?);
-        writer.write_header(&header).await?;
+        writer.write_header(&output_header).await?;
 
         // Get the chromosome sizes
         let chromsizes = header
@@ -99,7 +99,7 @@ impl BamFilterer {
             while query.read_record(&mut record).await? != 0 {
                 let is_valid = self.filter.is_valid(&record, Some(&header))?;
                 if is_valid {
-                    writer.write_record(&header, &record).await?;
+                    writer.write_record(&output_header, &record).await?;
                 }
             }
         }
@@ -138,15 +138,20 @@ impl BamFilterer {
                 .build_from_path(&filepath)
                 .expect("Error reading file");
             let header = get_bam_header(&filepath).expect("Error reading header");
+            let output_header =
+                add_bamnado_program_group(&header).expect("Error creating output BAM header");
 
             let mut writer = bam::io::writer::Builder {}
                 .build_from_path(outfile)
                 .expect("Error writing to file");
+            writer
+                .write_header(&output_header)
+                .expect("Error writing BAM header");
 
             for chunk in rx.iter() {
                 for record in chunk {
                     writer
-                        .write_record(&header, &record)
+                        .write_record(&output_header, &record)
                         .expect("Error writing record");
                 }
             }
@@ -179,5 +184,55 @@ impl BamFilterer {
 
         handle.join().expect("Error joining threads");
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use noodles::sam::header::record::value::map::program::tag as pg_tag;
+    use tempfile::TempDir;
+
+    fn test_bam() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("Failed to get workspace root")
+            .join("test/data/test.bam")
+    }
+
+    #[test]
+    fn test_split_writes_bamnado_program_group_to_header() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let output_bam = temp_dir.path().join("filtered.bam");
+
+        let filterer = BamFilterer::new(test_bam(), output_bam.clone(), BamReadFilter::default());
+        filterer.split().expect("Failed to split BAM");
+
+        let mut reader = bam::io::reader::Builder
+            .build_from_path(&output_bam)
+            .expect("Failed to open output BAM");
+        let header = reader
+            .read_header()
+            .expect("Failed to read output BAM header");
+        let program = header
+            .programs()
+            .as_ref()
+            .get(&b"bamnado"[..])
+            .expect("Missing bamnado @PG record");
+
+        assert_eq!(
+            program
+                .other_fields()
+                .get(&pg_tag::NAME)
+                .map(|v| v.as_ref()),
+            Some(&b"bamnado"[..])
+        );
+        assert_eq!(
+            program
+                .other_fields()
+                .get(&pg_tag::VERSION)
+                .map(|v| v.as_ref()),
+            Some(env!("CARGO_PKG_VERSION").as_bytes())
+        );
     }
 }

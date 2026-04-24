@@ -130,6 +130,10 @@ struct CoverageOptions {
     /// Ignore scaffold chromosomes
     #[arg(long, action = clap::ArgAction::SetTrue)]
     ignore_scaffold: bool,
+
+    /// Number of threads to use for BigWig writing
+    #[arg(long, default_value = "6")]
+    threads: u32,
 }
 
 #[derive(Parser)]
@@ -502,6 +506,7 @@ fn main() -> Result<()> {
                 coverage_options.ignore_scaffold,
                 coverage_options.shift,
                 coverage_options.truncate,
+                Some(coverage_options.threads),
             );
 
             // Determine output file
@@ -627,6 +632,7 @@ fn main() -> Result<()> {
                     coverage_options.ignore_scaffold,
                     coverage_options.shift,
                     coverage_options.truncate,
+                    Some(coverage_options.threads),
                 ));
             }
 
