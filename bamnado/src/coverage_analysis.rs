@@ -1004,12 +1004,18 @@ mod tests {
         let pileup = create_test_bam_pileup();
         let display_str = format!("{pileup}");
 
-        assert!(display_str.contains("Pileup Settings:"));
-        assert!(display_str.contains("BAM file: test.bam"));
-        assert!(display_str.contains("Bin size: 1000"));
-        assert!(display_str.contains("Normalization method:"));
-        assert!(display_str.contains("Scaling factor: 1"));
-        assert!(display_str.contains("Using fragment for counting: false"));
+        assert!(display_str.contains("Coverage Run Details"));
+        assert!(display_str.contains("input"));
+        assert!(display_str.contains("test.bam"));
+        assert!(display_str.contains("bin size"));
+        assert!(display_str.contains("1000 bp"));
+        assert!(display_str.contains("normalization"));
+        assert!(display_str.contains("Raw"));
+        assert!(display_str.contains("normalization factor"));
+        assert!(display_str.contains("1.000000"));
+        assert!(display_str.contains("scale factor"));
+        assert!(display_str.contains("counting"));
+        assert!(display_str.contains("reads"));
     }
 
     #[test]
