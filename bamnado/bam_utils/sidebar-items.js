@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"constant":["CB"],"enum":["FileType","Strand"],"fn":["bam_header","bed_to_lapper","convert_lapper_chrom_names_to_ids","get_bam_header","progress_bar","regions_to_lapper"],"struct":["BamStats","CellBarcodes","CellBarcodesMulti"],"type":["Iv"]};
+window.SIDEBAR_ITEMS = {"constant":["CB"],"enum":["FileType","Strand"],"fn":["add_bamnado_program_group","bam_header","bed_to_lapper","convert_lapper_chrom_names_to_ids","get_bam_header","progress_bar","regions_to_lapper"],"struct":["BamStats","CellBarcodes","CellBarcodesMulti"],"type":["Iv"]};
