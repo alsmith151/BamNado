@@ -21,6 +21,10 @@ use anyhow::{Context, Result};
 use bigtools::BigWigRead;
 use bigtools::beddata::BedParserStreamingIterator;
 use bigtools::{BigWigWrite, Value};
+use comfy_table::{
+    Cell, CellAlignment, ContentArrangement, Table, modifiers::UTF8_ROUND_CORNERS,
+    presets::UTF8_FULL,
+};
 use indicatif::ParallelProgressIterator;
 use log::{debug, info};
 use noodles::bam;
@@ -36,6 +40,13 @@ fn is_scaffold(name: &str) -> bool {
     SCAFFOLD_REGEX
         .get_or_init(|| Regex::new("(chrUn.*|.*alt|.*random)").unwrap())
         .is_match(name)
+}
+
+fn shift_is_noop(shift: Shift) -> bool {
+    shift.five_prime == 0
+        && shift.three_prime == 0
+        && shift.five_prime_reverse == 0
+        && shift.three_prime_reverse == 0
 }
 
 /// Write a DataFrame as a bedGraph file (tab-separated, no header).
@@ -155,13 +166,68 @@ pub struct BamPileup {
 
 impl Display for BamPileup {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
-        writeln!(f, "Pileup Settings:")?;
-        writeln!(f, "BAM file: {}", self.file_path.display())?;
-        writeln!(f, "Bin size: {}", self.bin_size)?;
-        writeln!(f, "Normalization method: {:?}", self.norm_method)?;
-        writeln!(f, "Scaling factor: {}", self.scale_factor)?;
-        writeln!(f, "Using fragment for counting: {}", self.use_fragment)?;
-        write!(f, "Filtering using: \n{}\n", self.filter)
+        let counting_mode = if self.use_fragment {
+            "fragments"
+        } else {
+            "reads"
+        };
+        let stats = self.filter.stats();
+        let normalization_factor = if matches!(self.norm_method, NormalizationMethod::Raw)
+            || stats.n_reads_after_filtering() > 0
+        {
+            format!("{:.6}", self.normalization_factor())
+        } else {
+            "pending".to_string()
+        };
+        let mut rows = vec![
+            ("input", self.file_path.display().to_string()),
+            ("bin size", format!("{} bp", self.bin_size)),
+            ("normalization", format!("{:?}", self.norm_method)),
+            ("normalization factor", normalization_factor),
+            ("scale factor", format!("{:.3}", self.scale_factor)),
+            ("counting", counting_mode.to_string()),
+            ("output threads", self.nthreads.to_string()),
+            (
+                "scaffolds",
+                if self.ignore_scaffold_chromosomes {
+                    "ignored".to_string()
+                } else {
+                    "included".to_string()
+                },
+            ),
+        ];
+
+        if let Some(shift) = self.shift.filter(|shift| !shift_is_noop(*shift)) {
+            rows.push((
+                "shift",
+                format!(
+                    "{},{},{},{}",
+                    shift.five_prime,
+                    shift.three_prime,
+                    shift.five_prime_reverse,
+                    shift.three_prime_reverse
+                ),
+            ));
+        }
+        if let Some(truncate) = self.truncate {
+            rows.push(("truncate", format!("{truncate:?}")));
+        }
+
+        let mut table = Table::new();
+        table
+            .load_preset(UTF8_FULL)
+            .apply_modifier(UTF8_ROUND_CORNERS)
+            .set_content_arrangement(ContentArrangement::Dynamic)
+            .set_header(vec!["setting", "value"]);
+
+        for (label, value) in rows {
+            table.add_row(vec![
+                Cell::new(label),
+                Cell::new(value).set_alignment(CellAlignment::Right),
+            ]);
+        }
+
+        write!(f, "Coverage Run Details\n{table}")
     }
 }
 
@@ -255,12 +321,9 @@ impl BamPileup {
         // Calculate the normalization factor based on the normalization method.
         let filter_stats = self.filter.stats();
         let n_reads = filter_stats.n_reads_after_filtering();
-        let normalization_factor =
-            self.norm_method
-                .scale_factor(self.scale_factor, self.bin_size, n_reads);
-        // Log the normalization factor.
-        info!("Normalization factor: {normalization_factor}");
-        normalization_factor
+
+        self.norm_method
+            .scale_factor(self.scale_factor, self.bin_size, n_reads)
     }
 
     /// Generate pileup for a single chromosome.
@@ -510,10 +573,10 @@ impl BamPileup {
             .sum();
 
         info!(
-            "Pileup complete: {} chromosomes, {} total intervals, {} bp coverage",
+            "Pileup complete: {} chromosomes, {} intervals, {} bp spanned",
             n_chromosomes, total_intervals, total_bp_covered
         );
-        info!("Overall filtering statistics: {}", self.filter.stats());
+        info!("Read filtering: {}", self.filter.stats());
         self.log_filter_stats("Overall");
 
         Ok(pileup)
@@ -591,14 +654,14 @@ impl BamPileup {
     ///
     /// * `outfile` - The path to the output bedGraph file.
     pub fn to_bedgraph(&self, outfile: PathBuf) -> Result<()> {
-        info!("Writing bedGraph file to {}", outfile.display());
+        info!("Writing bedGraph to {}", outfile.display());
         let df = self.pileup_normalised()?;
         write_bedgraph(df, outfile.clone(), self.ignore_scaffold_chromosomes)?;
 
         if outfile.exists() {
             let file_size = std::fs::metadata(&outfile)?.len();
             info!(
-                "bedGraph file written: {} ({:.2} MB)",
+                "Wrote bedGraph: {} ({:.2} MB)",
                 outfile.display(),
                 file_size as f64 / 1_000_000.0
             );
@@ -728,7 +791,7 @@ impl BamPileup {
             .build()?;
         bw_writer.write(bed_iter, runtime)?;
 
-        info!("BigWig file successfully written: {}", outfile.display());
+        info!("Wrote BigWig: {}", outfile.display());
         Ok(())
     }
 }
