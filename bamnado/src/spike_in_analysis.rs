@@ -18,6 +18,8 @@ use crossbeam::channel::unbounded;
 use log::info;
 use noodles::{bam, sam};
 
+use crate::bam_utils::add_bamnado_program_group;
+
 /// Statistics for the read splitting process.
 ///
 /// Tracks the number of reads assigned to each category (endogenous, exogenous, etc.).
@@ -187,10 +189,10 @@ impl BamSplitter {
             }
         }
 
-        let header_endogenous = header_input.clone();
-        let header_exogenous = header_input.clone();
-        let header_both_genomes = header_input.clone();
-        let header_unmapped = header_input.clone();
+        let header_endogenous = add_bamnado_program_group(&header_input)?;
+        let header_exogenous = add_bamnado_program_group(&header_input)?;
+        let header_both_genomes = add_bamnado_program_group(&header_input)?;
+        let header_unmapped = add_bamnado_program_group(&header_input)?;
 
         let stats = SplitStats::new(
             input_path

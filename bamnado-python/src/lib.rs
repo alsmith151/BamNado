@@ -281,6 +281,7 @@ mod _bamnado {
             ignore_scaffold_chromosomes,
             None,
             None,
+            None,
         );
 
         let signal = bam_pileup

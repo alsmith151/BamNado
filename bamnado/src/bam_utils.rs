@@ -15,6 +15,7 @@ use log::debug;
 
 use bio_types::strand::Strand as BioStrand;
 use noodles::core::{Position, Region};
+use noodles::sam::header::record::value::{Map, map::Program, map::program::tag as pg_tag};
 use noodles::{bam, bed, sam};
 use polars::prelude::*;
 use rust_lapper::Interval;
@@ -27,6 +28,9 @@ use std::str::FromStr;
 pub const CB: [u8; 2] = [b'C', b'B'];
 /// Type alias for an interval with a `u32` value.
 pub type Iv = Interval<usize, u32>;
+const BAMNADO_PROGRAM_ID: &str = "bamnado";
+const BAMNADO_PROGRAM_NAME: &str = "bamnado";
+const BAMNADO_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Represents the strand of a genomic feature.
 #[derive(Debug, Clone, PartialEq, Eq, Copy)]
@@ -490,32 +494,6 @@ impl BamStats {
         Ok(chromsizes)
     }
 
-    /// Writes chromosome sizes to a TSV file.
-    pub fn write_chromsizes(&self, outfile: PathBuf) -> Result<()> {
-        let chrom_sizes = self.chromsizes_ref_name()?;
-        // Convert the chromosome sizes to a DataFrame
-        let mut df = DataFrame::new(vec![
-            Column::new(
-                "chrom".into(),
-                chrom_sizes.keys().cloned().collect::<Vec<String>>(),
-            ),
-            Column::new(
-                "length".into(),
-                chrom_sizes.values().cloned().collect::<Vec<u64>>(),
-            ),
-        ])?;
-
-        // Sort the DataFrame by chromosome name
-        df.sort_in_place(["chrom"], SortMultipleOptions::default())?;
-
-        let mut file = std::fs::File::create(outfile)?;
-        CsvWriter::new(&mut file)
-            .include_header(false)
-            .with_separator(b'\t')
-            .finish(&mut df)?;
-        Ok(())
-    }
-
     /// Returns the number of mapped reads.
     pub fn n_mapped(&self) -> u64 {
         self.n_mapped
@@ -529,6 +507,11 @@ impl BamStats {
     /// Returns the total number of reads.
     pub fn n_total_reads(&self) -> u64 {
         self.n_reads
+    }
+
+    /// Returns a reference to the BAM header.
+    pub fn header(&self) -> &sam::Header {
+        &self.header
     }
 
     /// Checks whether the BAM file contains paired-end reads by inspecting the first few records.
@@ -727,15 +710,79 @@ where
     Ok(header)
 }
 
+/// Returns a BAM header annotated with a `@PG` record for the current bamnado run.
+pub fn add_bamnado_program_group(header: &sam::Header) -> Result<sam::Header> {
+    let mut output_header = header.clone();
+    let mut program = Map::<Program>::default();
+
+    program
+        .other_fields_mut()
+        .insert(pg_tag::NAME, BAMNADO_PROGRAM_NAME.into());
+    program
+        .other_fields_mut()
+        .insert(pg_tag::VERSION, BAMNADO_VERSION.into());
+
+    if let Some(command_line) = bamnado_command_line() {
+        program
+            .other_fields_mut()
+            .insert(pg_tag::COMMAND_LINE, command_line.into());
+    }
+
+    output_header
+        .programs_mut()
+        .add(BAMNADO_PROGRAM_ID, program)
+        .context("Failed to append bamnado @PG header record")?;
+
+    Ok(output_header)
+}
+
+fn bamnado_command_line() -> Option<String> {
+    let args = std::env::args_os()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+
+    (!args.is_empty()).then(|| args.join(" "))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use noodles::sam::header::record::value::map::program::tag as pg_tag;
 
     fn test_bam() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("Failed to get workspace root")
             .join("test/data/test.bam")
+    }
+
+    #[test]
+    fn test_add_bamnado_program_group_appends_pg_record() {
+        let header = sam::Header::default();
+        let output_header =
+            add_bamnado_program_group(&header).expect("Failed to add bamnado program group");
+
+        let program = output_header
+            .programs()
+            .as_ref()
+            .get(&b"bamnado"[..])
+            .expect("Missing bamnado @PG record");
+
+        assert_eq!(
+            program
+                .other_fields()
+                .get(&pg_tag::NAME)
+                .map(|v| v.as_ref()),
+            Some(&b"bamnado"[..])
+        );
+        assert_eq!(
+            program
+                .other_fields()
+                .get(&pg_tag::VERSION)
+                .map(|v| v.as_ref()),
+            Some(env!("CARGO_PKG_VERSION").as_bytes())
+        );
+        assert!(program.other_fields().contains_key(&pg_tag::COMMAND_LINE));
     }
 
     #[test]
