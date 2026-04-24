@@ -19,7 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Changes in existing functionality
+- Refined CLI help output with clearer command descriptions, grouped option sections, and command examples.
+- Cleaned up several long option names while keeping backwards-compatible aliases, including `--normalize`, `--fragment-counts`, `--blacklist`, `--barcode-allowlist`, `--tag`, and fragment-length flags.
 
 ## [0.3.1] - 2025-07-09
 

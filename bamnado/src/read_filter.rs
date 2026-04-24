@@ -11,6 +11,9 @@
 
 use ahash::{HashMap, HashSet};
 use anyhow::{Context, Result};
+use comfy_table::{
+    Cell, ContentArrangement, Table, modifiers::UTF8_ROUND_CORNERS, presets::UTF8_FULL,
+};
 use noodles::sam;
 use noodles::sam::alignment::record::data::field::Value;
 use noodles::sam::alignment::record::data::field::tag::Tag;
@@ -105,38 +108,105 @@ pub struct BamReadFilterStatsSnapshot {
 
 impl Display for BamReadFilterStatsSnapshot {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f)?;
-        writeln!(f, "Total reads: {}", self.n_total)?;
-        writeln!(f, "Failed proper pair: {}", self.n_failed_proper_pair)?;
-        writeln!(f, "Failed mapping quality: {}", self.n_failed_mapq)?;
-        writeln!(f, "Failed length: {}", self.n_failed_length)?;
-        writeln!(f, "Failed blacklist: {}", self.n_failed_blacklist)?;
-        writeln!(f, "Failed barcode: {}", self.n_failed_barcode)?;
-        writeln!(f, "Not in read group: {}", self.n_not_in_read_group)?;
-        writeln!(f, "Incorrect strand: {}", self.n_incorrect_strand)?;
-        writeln!(f, "Failed tag filter: {}", self.n_failed_tag_filter)?;
-        writeln!(
-            f,
-            "Failed fragment length: {}",
-            self.n_failed_fragment_length
-        )?;
-        writeln!(
-            f,
-            "Filtered reads: {}",
-            self.n_failed_proper_pair
-                + self.n_failed_mapq
-                + self.n_failed_length
-                + self.n_failed_blacklist
-                + self.n_failed_barcode
-                + self.n_not_in_read_group
-                + self.n_incorrect_strand
-                + self.n_failed_tag_filter
-                + self.n_failed_fragment_length
-        )
+        let rows = self.stage_rows();
+        let mut table = Table::new();
+        table
+            .load_preset(UTF8_FULL)
+            .apply_modifier(UTF8_ROUND_CORNERS)
+            .set_content_arrangement(ContentArrangement::Dynamic)
+            .set_header(vec!["stage", "remain", "drop", "% total"]);
+
+        for (label, remain, dropped, pct) in rows {
+            let dropped = if dropped == 0 {
+                "-".to_string()
+            } else {
+                format!("-{}", Self::format_count(dropped))
+            };
+
+            table.add_row(vec![
+                Cell::new(label),
+                Cell::new(Self::format_count(remain))
+                    .set_alignment(comfy_table::CellAlignment::Right),
+                Cell::new(dropped).set_alignment(comfy_table::CellAlignment::Right),
+                Cell::new(format!("{pct:.1}%")).set_alignment(comfy_table::CellAlignment::Right),
+            ]);
+        }
+
+        writeln!(f, "Read Filtering Funnel")?;
+        write!(f, "{table}")?;
+
+        Ok(())
     }
 }
 
 impl BamReadFilterStatsSnapshot {
+    fn format_count(count: u64) -> String {
+        let digits = count.to_string();
+        let mut out = String::with_capacity(digits.len() + digits.len() / 3);
+        for (i, ch) in digits.chars().rev().enumerate() {
+            if i > 0 && i % 3 == 0 {
+                out.push(',');
+            }
+            out.push(ch);
+        }
+        out.chars().rev().collect()
+    }
+
+    /// Returns the number of reads filtered out.
+    pub fn n_filtered(&self) -> u64 {
+        self.n_total - self.n_reads_after_filtering()
+    }
+
+    /// Returns the percentage of reads that passed filtering.
+    pub fn pass_rate(&self) -> f64 {
+        if self.n_total == 0 {
+            0.0
+        } else {
+            (self.n_reads_after_filtering() as f64 / self.n_total as f64) * 100.0
+        }
+    }
+
+    fn pct_of_total(&self, count: u64) -> f64 {
+        if self.n_total == 0 {
+            0.0
+        } else {
+            (count as f64 / self.n_total as f64) * 100.0
+        }
+    }
+
+    /// Returns rows for a staged read-filtering summary.
+    pub fn stage_rows(&self) -> Vec<(&'static str, u64, u64, f64)> {
+        let mut remaining = self.n_total;
+        let mut rows = vec![("Initial reads", remaining, 0, 100.0)];
+
+        let failures = [
+            ("Pass strand filter", self.n_incorrect_strand),
+            ("Pass proper-pair filter", self.n_failed_proper_pair),
+            ("Pass minimum MAPQ", self.n_failed_mapq),
+            ("Pass read-length filter", self.n_failed_length),
+            ("Pass fragment-length filter", self.n_failed_fragment_length),
+            ("Outside blacklist", self.n_failed_blacklist),
+            ("Pass barcode allowlist", self.n_failed_barcode),
+            ("Pass read-group filter", self.n_not_in_read_group),
+            ("Pass tag filter", self.n_failed_tag_filter),
+        ];
+
+        for (label, dropped) in failures {
+            if dropped > 0 {
+                remaining -= dropped;
+                rows.push((label, remaining, dropped, self.pct_of_total(remaining)));
+            }
+        }
+
+        rows.push((
+            "Reads retained",
+            self.n_reads_after_filtering(),
+            0,
+            self.pass_rate(),
+        ));
+        rows
+    }
+
     /// Returns the number of reads remaining after filtering.
     pub fn n_reads_after_filtering(&self) -> u64 {
         self.n_total
@@ -397,6 +467,9 @@ impl BamReadFilter {
 
         // Filter by proper pair.
         if self.proper_pair && !flags.is_properly_segmented() {
+            self.stats
+                .n_failed_proper_pair
+                .fetch_add(1, Ordering::Relaxed);
             return Ok(false);
         }
 

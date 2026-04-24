@@ -27,7 +27,7 @@ Useful in workflows including single-cell and Micro-Capture-C (MCC), and many ot
 - Read filtering by mapping quality, length, strand, fragment size, tags, and barcodes
 - BigWig comparison (subtraction, ratio, log-ratio)
 - BigWig aggregation (sum, mean, median, min, max)
-- `collapse-bedgraph` utility to merge adjacent bins with identical scores
+- bedGraph post-processing with `collapse-bedgraph`
 - Python bindings for selected functionality
 
 ## Installation
@@ -287,9 +287,14 @@ bamnado <command> --help            # Help for a specific command
 
 ### Available commands
 
-- **Coverage generation**: `bam-coverage`, `multi-bam-coverage`
+- **Coverage generation**: `bam-coverage` (`coverage`), `multi-bam-coverage` (`multi-coverage`)
 - **BAM manipulation**: `split`, `split-exogenous`, `modify`
-- **BigWig tools**: `bigwig-compare`, `bigwig-aggregate`, `collapse-bedgraph`
+- **BigWig tools**: `bigwig-compare` (`compare-bigwigs`), `bigwig-aggregate` (`aggregate-bigwigs`)
+- **bedGraph tools**: `collapse-bedgraph` (`collapse`)
+
+### Common naming cleanups
+
+The CLI now exposes shorter, more descriptive option names. Older names still work as compatibility aliases.
 
 ### Read filtering
 
@@ -298,16 +303,25 @@ All coverage commands share common read filter flags:
 | Flag | Default | Description |
 | ---- | ------- | ----------- |
 | `--strand` | `both` | `forward`, `reverse`, or `both` |
-| `--proper-pair` | off | Keep only properly-paired reads |
+| `--proper-pairs` | off | Keep only properly-paired reads |
 | `--min-mapq` | 20 | Minimum mapping quality |
 | `--min-length` | 20 | Minimum read length (bp) |
 | `--max-length` | 1000 | Maximum read length (bp) |
-| `--min-fragment-length` | — | Minimum insert size (bp); paired-end only |
-| `--max-fragment-length` | — | Maximum insert size (bp); paired-end only |
-| `--blacklisted-locations` | — | BED file of regions to exclude |
-| `--whitelisted-barcodes` | — | Text file of cell barcodes (one per line) |
+| `--min-fragment-len` | — | Minimum insert size (bp); paired-end only |
+| `--max-fragment-len` | — | Maximum insert size (bp); paired-end only |
+| `--blacklist` | — | BED file of regions to exclude |
+| `--barcode-allowlist` | — | Text file of cell barcodes (one per line) |
 | `--read-group` | — | Keep only this read group |
-| `--filter-tag` / `--filter-tag-value` | — | Keep reads where TAG == VALUE |
+| `--tag` / `--tag-value` | — | Keep reads where TAG == VALUE |
+
+### Coverage-specific flags
+
+| Flag | Default | Description |
+| ---- | ------- | ----------- |
+| `--normalize` | `raw` | Signal normalization method: `raw`, `rpkm`, or `cpm` |
+| `--fragment-counts` | off | Count fragments instead of individual read alignments |
+| `--ignore-scaffolds` | off | Skip scaffold or unplaced chromosomes |
+| `--threads` | `6` | Threads used when writing BigWig output |
 
 ### Examples
 
@@ -327,9 +341,9 @@ bamnado bam-coverage \
   --bam sample.bam \
   --output coverage_hq.bw \
   --bin-size 100 \
-  --norm-method rpkm \
+  --normalize rpkm \
   --min-mapq 30 \
-  --proper-pair
+  --proper-pairs
 ```
 
 #### Extract nucleosome-free regions from ATAC-seq
@@ -340,9 +354,9 @@ bamnado bam-coverage \
   --output nfr_forward.bw \
   --bin-size 10 \
   --strand forward \
-  --min-fragment-length 100 \
-  --max-fragment-length 200 \
-  --use-fragment \
+  --min-fragment-len 100 \
+  --max-fragment-len 200 \
+  --fragment-counts \
   --min-mapq 20
 ```
 
@@ -353,8 +367,8 @@ bamnado bam-coverage \
   --bam possorted_genome_bam.bam \
   --output cell_coverage.bw \
   --bin-size 100 \
-  --whitelisted-barcodes barcodes.txt \
-  --use-fragment
+  --barcode-allowlist barcodes.txt \
+  --fragment-counts
 ```
 
 #### Filter by SAM tag (MCC viewpoint)
@@ -364,9 +378,9 @@ bamnado bam-coverage \
   --bam mcc.bam \
   --output BCL2_viewpoint.bw \
   --bin-size 50 \
-  --filter-tag "VP" \
-  --filter-tag-value "BCL2" \
-  --use-fragment \
+  --tag VP \
+  --tag-value BCL2 \
+  --fragment-counts \
   --min-mapq 30
 ```
 

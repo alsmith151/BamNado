@@ -1,6 +1,10 @@
 use anyhow::{Context, Result};
 use bamnado::bam_utils::FileType;
 use clap::{Parser, Subcommand};
+use comfy_table::{
+    Cell, CellAlignment, ContentArrangement, Table, modifiers::UTF8_ROUND_CORNERS,
+    presets::UTF8_FULL,
+};
 use log::info;
 use polars::prelude::*;
 use std::str::FromStr;
@@ -50,113 +54,165 @@ pub fn get_styles() -> clap::builder::Styles {
 
 // Define common filter options as a trait to avoid code duplication
 #[derive(Parser, Clone)]
+#[command(next_help_heading = "Read Filters")]
 struct FilterOptions {
-    /// Filter reads based on strand
-    #[arg(long, default_value = "both")]
+    /// Count only reads from the selected strand.
+    #[arg(long, default_value = "both", value_name = "STRAND")]
     strand: bamnado::Strand,
 
-    /// Properly paired reads only
-    #[arg(long, action = clap::ArgAction::SetTrue)]
+    /// Keep only properly paired reads.
+    #[arg(
+        long = "proper-pairs",
+        visible_alias = "proper-pair",
+        action = clap::ArgAction::SetTrue
+    )]
     proper_pair: bool,
 
-    /// Minimum mapping quality
-    #[arg(long, required = false, default_value = "20")]
+    /// Minimum mapping quality.
+    #[arg(long, default_value = "20", value_name = "INT")]
     min_mapq: u8,
 
-    /// Minimum read length
-    #[arg(long, required = false, default_value = "20")]
+    /// Minimum read length in base pairs.
+    #[arg(long, default_value = "20", value_name = "BP")]
     min_length: u32,
 
-    /// Maximum read length
-    #[arg(long, required = false, default_value = "1000")]
+    /// Maximum read length in base pairs.
+    #[arg(long, default_value = "1000", value_name = "BP")]
     max_length: u32,
 
-    /// Blacklisted locations in BED format
-    #[arg(long, required = false)]
+    /// BED file of regions to exclude.
+    #[arg(
+        long = "blacklist",
+        visible_alias = "blacklisted-locations",
+        value_name = "BED"
+    )]
     blacklisted_locations: Option<PathBuf>,
 
-    /// Whitelisted barcodes in a text file (one barcode per line)
-    #[arg(long, required = false)]
+    /// Text file of barcodes to keep, one barcode per line.
+    #[arg(
+        long = "barcode-allowlist",
+        visible_alias = "whitelisted-barcodes",
+        value_name = "FILE"
+    )]
     whitelisted_barcodes: Option<PathBuf>,
 
-    /// Selected read group
-    #[arg(long, required = false)]
+    /// Keep only reads from this read group.
+    #[arg(long, value_name = "RG")]
     read_group: Option<String>,
 
-    /// Filter reads by SAM tag (e.g., VP, AS, etc.)
-    #[arg(long, required = false)]
+    /// Keep reads with this SAM tag.
+    #[arg(long = "tag", visible_alias = "filter-tag", value_name = "TAG")]
     filter_tag: Option<String>,
 
-    /// Value for the filter tag (e.g., BCL2, TP, etc.)
-    #[arg(long, required = false)]
+    /// Required value for `--tag`.
+    #[arg(
+        long = "tag-value",
+        visible_alias = "filter-tag-value",
+        value_name = "VALUE"
+    )]
     filter_tag_value: Option<String>,
 
-    /// Minimum fragment length (insert size / TLEN) in base pairs
-    #[arg(long, required = false)]
+    /// Minimum fragment length (TLEN) in base pairs.
+    #[arg(
+        long = "min-fragment-len",
+        visible_alias = "min-fragment-length",
+        value_name = "BP"
+    )]
     min_fragment_length: Option<u32>,
 
-    /// Maximum fragment length (insert size / TLEN) in base pairs
-    #[arg(long, required = false)]
+    /// Maximum fragment length (TLEN) in base pairs.
+    #[arg(
+        long = "max-fragment-len",
+        visible_alias = "max-fragment-length",
+        value_name = "BP"
+    )]
     max_fragment_length: Option<u32>,
 }
 
 // Common coverage options for both single and multi-BAM operations
 #[derive(Parser, Clone)]
+#[command(next_help_heading = "Coverage Options")]
 struct CoverageOptions {
-    /// Bin size for coverage calculation
-    #[arg(short = 's', long)]
+    /// Bin size for the output track.
+    #[arg(short = 's', long, value_name = "BP")]
     bin_size: Option<u64>,
 
-    /// Normalization method to use
-    #[arg(short, long, default_value = "raw")]
+    /// Signal normalization method.
+    #[arg(
+        short = 'n',
+        long = "normalize",
+        visible_alias = "norm-method",
+        default_value = "raw",
+        value_name = "METHOD"
+    )]
     norm_method: Option<bamnado::signal_normalization::NormalizationMethod>,
 
-    /// Scaling factor for the pileup
-    #[arg(short = 'f', long)]
+    /// Multiply the final signal by this factor.
+    #[arg(short = 'f', long, value_name = "FLOAT")]
     scale_factor: Option<f32>,
 
-    /// Use the fragment or the read for counting
-    #[arg(long, action = clap::ArgAction::SetTrue)]
+    /// Count fragments instead of individual read alignments.
+    #[arg(
+        long = "fragment-counts",
+        visible_alias = "use-fragment",
+        action = clap::ArgAction::SetTrue
+    )]
     use_fragment: bool,
 
-    /// Shift options for the pileup
-    #[arg(long, default_value = "0,0,0,0")]
+    /// Shift read or fragment ends before pileup.
+    #[arg(long, default_value = "0,0,0,0", value_name = "L,R,FL,FR")]
     shift: Option<bamnado::genomic_intervals::Shift>,
 
-    /// Truncate options for the pileup
-    #[arg(long)]
+    /// Trim read or fragment ends before pileup.
+    #[arg(long, value_name = "L,R,FL,FR")]
     truncate: Option<bamnado::genomic_intervals::Truncate>,
 
-    /// Ignore scaffold chromosomes
-    #[arg(long, action = clap::ArgAction::SetTrue)]
+    /// Skip scaffold or unplaced chromosomes.
+    #[arg(
+        long = "ignore-scaffolds",
+        visible_alias = "ignore-scaffold",
+        action = clap::ArgAction::SetTrue
+    )]
     ignore_scaffold: bool,
 
-    /// Number of threads to use for BigWig writing
-    #[arg(long, default_value = "6")]
+    /// Threads to use while writing BigWig output.
+    #[arg(long, default_value = "6", value_name = "N")]
     threads: u32,
 }
 
 #[derive(Parser)]
-#[command(author, version, about, long_about = None, styles=get_styles())]
+#[command(
+    author,
+    version,
+    about = "Fast BAM and BigWig utilities for genomics workflows.",
+    long_about = "Fast BAM and BigWig utilities for genomics workflows.\n\nUse `bamnado <command> --help` to see command-specific options and examples.",
+    styles = get_styles(),
+    arg_required_else_help = true
+)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
 
-    /// Verbosity level
-    #[arg(short, long, required = false, default_value = "2")]
+    /// Log verbosity from 0 (quiet) to 4 (debug).
+    #[arg(short, long, default_value = "2", global = true, value_name = "LEVEL")]
     verbose: u8,
 }
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Calculate coverage from a BAM file and write to a bedGraph or bigWig file
+    /// Generate a coverage track from one BAM file.
+    #[command(
+        name = "bam-coverage",
+        visible_alias = "coverage",
+        after_help = "Example:\n  bamnado bam-coverage --bam sample.bam --output sample.bw --bin-size 50 --normalize cpm"
+    )]
     BamCoverage {
-        /// Bam file for processing
-        #[arg(short, long)]
+        /// Input BAM file.
+        #[arg(short, long, value_name = "BAM")]
         bam: PathBuf,
 
-        /// Output file name
-        #[arg(short, long)]
+        /// Output bedGraph or BigWig path.
+        #[arg(short, long, value_name = "FILE")]
         output: Option<PathBuf>,
 
         #[command(flatten)]
@@ -166,14 +222,15 @@ enum Commands {
         filter_options: FilterOptions,
     },
 
-    /// Calculate coverage from multiple BAM files and write to a bedGraph or bigWig file
+    /// Merge coverage from multiple BAM files into one track.
+    #[command(name = "multi-bam-coverage", visible_alias = "multi-coverage")]
     MultiBamCoverage {
-        /// List of BAM files for processing
-        #[arg(short, long)]
+        /// Input BAM files.
+        #[arg(short, long, value_name = "BAM")]
         bams: Vec<PathBuf>,
 
-        /// Output file name
-        #[arg(short, long)]
+        /// Output bedGraph or BigWig path.
+        #[arg(short, long, value_name = "FILE")]
         output: Option<PathBuf>,
 
         #[command(flatten)]
@@ -183,106 +240,108 @@ enum Commands {
         filter_options: FilterOptions,
     },
 
-    /// Compare two BigWig files
-    #[command(name = "bigwig-compare")]
+    /// Compare two BigWig files bin by bin.
+    #[command(name = "bigwig-compare", visible_alias = "compare-bigwigs")]
     CompareBigWigs {
-        /// Path to the first BigWig file
-        #[arg(long)]
+        /// First BigWig input.
+        #[arg(long, value_name = "BW")]
         bw1: PathBuf,
 
-        /// Path to the second BigWig file
-        #[arg(long)]
+        /// Second BigWig input.
+        #[arg(long, value_name = "BW")]
         bw2: PathBuf,
 
-        /// Output BigWig file path
-        #[arg(short, long)]
+        /// Output BigWig path.
+        #[arg(short, long, value_name = "BW")]
         output: PathBuf,
 
-        /// Comparison method
-        #[arg(short, long, value_enum)]
+        /// Comparison method.
+        #[arg(short, long, value_enum, value_name = "METHOD")]
         comparison: bamnado::bigwig_compare::Comparison,
 
-        /// Bin size for comparison
-        #[arg(short = 's', long, default_value = "50")]
+        /// Bin size for comparison.
+        #[arg(short = 's', long, default_value = "50", value_name = "BP")]
         bin_size: u32,
 
-        /// Chunk size for processing
-        #[arg(long)]
+        /// Processing chunk size.
+        #[arg(long, value_name = "N")]
         chunk_size: Option<usize>,
 
-        #[arg(long)]
+        /// Value added to both tracks before comparison.
+        #[arg(long, value_name = "FLOAT")]
         pseudocount: Option<f64>,
     },
 
-    /// Aggregate multiple BigWig files into one
-    #[command(name = "bigwig-aggregate")]
+    /// Aggregate multiple BigWig files into one track.
+    #[command(name = "bigwig-aggregate", visible_alias = "aggregate-bigwigs")]
     AggregateBigWigs {
-        /// Paths to the BigWig files to aggregate
-        #[arg(long, num_args = 1..)]
+        /// BigWig files to aggregate.
+        #[arg(long, num_args = 1.., value_name = "BW")]
         bigwigs: Vec<PathBuf>,
 
-        /// Output BigWig file path
-        #[arg(short, long)]
+        /// Output BigWig path.
+        #[arg(short, long, value_name = "BW")]
         output: PathBuf,
 
-        /// Aggregation method
-        #[arg(short, long, value_enum)]
+        /// Aggregation method.
+        #[arg(short, long, value_enum, value_name = "METHOD")]
         method: bamnado::bigwig_compare::AggregationMode,
 
-        /// Bin size for aggregation
-        #[arg(short = 's', long, default_value = "50")]
+        /// Bin size for aggregation.
+        #[arg(short = 's', long, default_value = "50", value_name = "BP")]
         bin_size: u32,
 
-        /// Pseudocount value to add to all values
-        #[arg(long)]
+        /// Value added to all inputs before aggregation.
+        #[arg(long, value_name = "FLOAT")]
         pseudocount: Option<f64>,
     },
 
-    /// Collapse adjacent equal-score bins in a BedGraph
-    #[command(name = "collapse-bedgraph")]
+    /// Collapse adjacent equal-score bins in a bedGraph.
+    #[command(name = "collapse-bedgraph", visible_alias = "collapse")]
     CollapseBedgraph {
-        /// Input BedGraph file (defaults to stdin)
-        #[arg(short, long)]
+        /// Input bedGraph path. Reads from stdin if omitted.
+        #[arg(short, long, value_name = "BEDGRAPH")]
         input: Option<PathBuf>,
 
-        /// Output BedGraph file (defaults to stdout)
-        #[arg(short, long)]
+        /// Output bedGraph path. Writes to stdout if omitted.
+        #[arg(short, long, value_name = "BEDGRAPH")]
         output: Option<PathBuf>,
     },
 
-    /// Split a BAM file based on a set of defined filters
+    /// Split a BAM file using the supplied filters.
     Split {
-        /// Input BAM file
-        #[arg(short, long)]
+        /// Input BAM file.
+        #[arg(short, long, value_name = "BAM")]
         input: PathBuf,
 
-        /// Output prefix
-        #[arg(short, long)]
+        /// Output prefix.
+        #[arg(short, long, value_name = "PREFIX")]
         output: PathBuf,
 
         #[command(flatten)]
         filter_options: FilterOptions,
     },
 
-    /// Split a BAM file into endogenous and exogenous reads
+    /// Split a BAM file into endogenous and exogenous reads.
+    #[command(visible_alias = "split-spikein")]
     SplitExogenous {
-        /// Input BAM file
-        #[arg(short, long)]
+        /// Input BAM file.
+        #[arg(short, long, value_name = "BAM")]
         input: PathBuf,
 
-        /// Output prefix
-        #[arg(short, long)]
+        /// Output prefix.
+        #[arg(short, long, value_name = "PREFIX")]
         output: PathBuf,
 
-        /// Prefix for exogenous sequences
-        #[arg(short, long)]
+        /// Reference-name prefix used to identify exogenous sequences.
+        #[arg(short, long, value_name = "PREFIX")]
         exogenous_prefix: String,
 
-        /// Path for stats output
-        #[arg(short, long)]
+        /// Optional path for summary statistics output.
+        #[arg(short, long, value_name = "FILE")]
         stats: Option<PathBuf>,
 
-        /// Allow unknown MAPQ values - useful for BAM files with MAPQ=255 i.e. STAR generated BAM files
+        /// Allow reads with MAPQ 255, which is common in STAR output.
         #[arg(long, action = clap::ArgAction::SetTrue)]
         allow_unknown_mapq: bool,
 
@@ -290,20 +349,21 @@ enum Commands {
         filter_options: FilterOptions,
     },
 
-    /// Filter and/or adjust reads in a BAM file e.g. shift for Tn5 insertion
+    /// Filter and/or adjust reads in a BAM file.
     Modify {
-        /// Input BAM file
-        #[arg(short, long)]
+        /// Input BAM file.
+        #[arg(short, long, value_name = "BAM")]
         input: PathBuf,
 
-        /// Output prefix
-        #[arg(short, long)]
+        /// Output prefix.
+        #[arg(short, long, value_name = "PREFIX")]
         output: PathBuf,
 
-        /// Reads to ignore during modification
+        /// Reads to exclude before modification.
         #[command(flatten)]
         filter_options: FilterOptions,
 
+        /// Apply the standard Tn5 offset.
         #[arg(long, action = clap::ArgAction::SetTrue)]
         tn5_shift: bool,
     },
@@ -330,44 +390,70 @@ fn validate_bam_file(bam_path: &Path) -> Result<()> {
 }
 
 fn log_active_filters(filter_options: &FilterOptions) {
-    info!("=== Active Filters ===");
-    info!("Strand: {}", filter_options.strand);
-    if filter_options.proper_pair {
-        info!("Proper pair: enabled");
-    }
-    info!("Min MAPQ: {}", filter_options.min_mapq);
-    info!(
-        "Read length: {} - {} bp",
-        filter_options.min_length, filter_options.max_length
-    );
-    if let Some(blacklist) = &filter_options.blacklisted_locations {
-        info!("Blacklist: {}", blacklist.display());
-    }
-    if let Some(whitelist) = &filter_options.whitelisted_barcodes {
-        info!("Whitelisted barcodes: {}", whitelist.display());
-    }
-    if let Some(rg) = &filter_options.read_group {
-        info!("Read group: {}", rg);
-    }
-    if let Some(tag) = &filter_options.filter_tag {
-        info!(
-            "Filter tag: {} = {}",
-            tag,
-            filter_options.filter_tag_value.as_deref().unwrap_or("*")
-        );
-    }
+    let mut rows = vec![
+        ("strand", filter_options.strand.to_string()),
+        ("min MAPQ", filter_options.min_mapq.to_string()),
+        (
+            "read length",
+            format!(
+                "{}..{} bp",
+                filter_options.min_length, filter_options.max_length
+            ),
+        ),
+        (
+            "proper pairs",
+            if filter_options.proper_pair {
+                "required".to_string()
+            } else {
+                "off".to_string()
+            },
+        ),
+    ];
+
     if filter_options.min_fragment_length.is_some() || filter_options.max_fragment_length.is_some()
     {
-        info!(
-            "Fragment length: {} - {} bp",
-            filter_options
-                .min_fragment_length
-                .map_or(String::from("0"), |v| v.to_string()),
-            filter_options
-                .max_fragment_length
-                .map_or(String::from("∞"), |v| v.to_string())
-        );
+        rows.push((
+            "fragment length",
+            format!(
+                "{}..{} bp",
+                filter_options
+                    .min_fragment_length
+                    .map_or(String::from("0"), |v| v.to_string()),
+                filter_options
+                    .max_fragment_length
+                    .map_or(String::from("inf"), |v| v.to_string())
+            ),
+        ));
     }
+    if let Some(blacklist) = &filter_options.blacklisted_locations {
+        rows.push(("blacklist", blacklist.display().to_string()));
+    }
+    if let Some(whitelist) = &filter_options.whitelisted_barcodes {
+        rows.push(("barcode allowlist", whitelist.display().to_string()));
+    }
+    if let Some(rg) = &filter_options.read_group {
+        rows.push(("read group", rg.clone()));
+    }
+    if let Some(tag) = &filter_options.filter_tag {
+        let value = filter_options.filter_tag_value.as_deref().unwrap_or("*");
+        rows.push(("tag", format!("{tag}={value}")));
+    }
+
+    let mut table = Table::new();
+    table
+        .load_preset(UTF8_FULL)
+        .apply_modifier(UTF8_ROUND_CORNERS)
+        .set_content_arrangement(ContentArrangement::Dynamic)
+        .set_header(vec!["filter", "value"]);
+
+    for (label, value) in rows {
+        table.add_row(vec![
+            Cell::new(label),
+            Cell::new(value).set_alignment(CellAlignment::Right),
+        ]);
+    }
+
+    info!("Read Filter Settings\n{table}");
 }
 
 fn create_filter_from_options(
@@ -424,8 +510,6 @@ fn create_filter_from_options(
                      paired-end data."
         ));
     }
-
-    println!("Blacklisted locations: {blacklisted_locations:?}");
 
     Ok(bamnado::read_filter::BamReadFilter::new(
         filter_options.strand.into(),
@@ -539,8 +623,6 @@ fn main() -> Result<()> {
                     ));
                 }
             }
-
-            info!("Successfully wrote output");
         }
 
         Commands::MultiBamCoverage {
