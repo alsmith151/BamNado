@@ -270,6 +270,10 @@ enum Commands {
         /// Value added to both tracks before comparison.
         #[arg(long, value_name = "FLOAT")]
         pseudocount: Option<f64>,
+
+        /// Number of threads to use for BigWig writing.
+        #[arg(long, default_value = "6")]
+        threads: u32,
     },
 
     /// Aggregate multiple BigWig files into one track.
@@ -294,6 +298,10 @@ enum Commands {
         /// Value added to all inputs before aggregation.
         #[arg(long, value_name = "FLOAT")]
         pseudocount: Option<f64>,
+
+        /// Number of threads to use for BigWig writing.
+        #[arg(long, default_value = "6")]
+        threads: u32,
     },
 
     /// Collapse adjacent equal-score bins in a bedGraph.
@@ -861,14 +869,16 @@ fn main() -> Result<()> {
             bin_size,
             chunk_size: _,
             pseudocount,
+            threads,
         } => {
-            bamnado::bigwig_compare::compare_bigwigs(
+            bamnado::bigwig_compare::compare_bigwigs_with_threads(
                 bw1,
                 bw2,
                 output,
                 comparison.clone(),
                 *bin_size,
                 *pseudocount,
+                *threads,
             )
             .context("Failed to compare BigWig files")?;
 
@@ -884,17 +894,19 @@ fn main() -> Result<()> {
             method,
             bin_size,
             pseudocount,
+            threads,
         } => {
             if bigwigs.is_empty() {
                 return Err(anyhow::anyhow!("At least one BigWig file must be provided"));
             }
 
-            bamnado::bigwig_compare::aggregate_bigwigs(
+            bamnado::bigwig_compare::aggregate_bigwigs_with_threads(
                 bigwigs,
                 output,
                 method.clone(),
                 *bin_size,
                 *pseudocount,
+                *threads,
             )
             .context("Failed to aggregate BigWig files")?;
 
