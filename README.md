@@ -392,6 +392,7 @@ bamnado bigwig-compare \
   --bw2 sample_control.bw \
   --comparison log-ratio \
   --pseudocount 1e-3 \
+  --threads 6 \
   -o treated_vs_control.bw
 ```
 
@@ -401,6 +402,7 @@ bamnado bigwig-compare \
 bamnado bigwig-aggregate \
   --bigwigs sample1.bw sample2.bw sample3.bw \
   --method mean \
+  --threads 6 \
   -o mean_coverage.bw
 ```
 

@@ -1,10 +1,10 @@
-use anyhow::Result;
-use bigtools::{DEFAULT_BLOCK_SIZE, DEFAULT_ITEMS_PER_SLOT};
-use itertools::Itertools;
+use anyhow::{Context, Result};
+use bigtools::beddata::BedParserStreamingIterator;
+use bigtools::{BigWigWrite, Value};
 use log::info;
 use rayon::prelude::*;
 use std::cmp::{Ordering, min};
-use std::io::{Read, Seek, Write};
+use std::io::{Read, Seek};
 use std::path::Path;
 
 /// Pairwise comparison applied to two binned signals.
@@ -453,7 +453,8 @@ fn binned_median_multi_bw(
 // -----------------------------
 
 /// Write bins in bedGraph format, merging consecutive equal-valued bins.
-fn write_bedgraph_bins<W: Write>(
+#[cfg(test)]
+fn write_bedgraph_bins<W: std::io::Write>(
     mut w: W,
     chrom: &str,
     chrom_len: u32,
@@ -494,59 +495,98 @@ fn write_bedgraph_bins<W: Write>(
     Ok(())
 }
 
-/// Write per-chromosome bins to a temporary bedGraph and convert to BigWig.
-fn write_bedgraph_to_bigwig_from_bins(
+fn push_bigwig_values_for_bins(
+    values: &mut Vec<(usize, Value)>,
+    chrom_idx: usize,
+    chrom_len: u32,
+    bin_size: u32,
+    bins: &[f32],
+) -> Result<()> {
+    if bin_size == 0 {
+        return Err(anyhow::anyhow!("bin_size must be > 0"));
+    }
+
+    let mut i = 0usize;
+    while i < bins.len() {
+        let start = (i as u32) * bin_size;
+        if start >= chrom_len {
+            break;
+        }
+        let mut end = min(start + bin_size, chrom_len);
+        let v = bins[i];
+
+        // Merge identical consecutive bins to reduce output size.
+        let mut j = i + 1;
+        while j < bins.len() {
+            let s2 = (j as u32) * bin_size;
+            if s2 >= chrom_len {
+                break;
+            }
+            let e2 = min(s2 + bin_size, chrom_len);
+            if bins[j] != v {
+                break;
+            }
+            end = e2;
+            j += 1;
+        }
+
+        values.push((
+            chrom_idx,
+            Value {
+                start,
+                end,
+                value: v,
+            },
+        ));
+        i = j;
+    }
+
+    Ok(())
+}
+
+/// Stream per-chromosome bins directly to BigWig in input chromosome order.
+fn write_bigwig_from_bins(
     chrom_info: &[bigtools::ChromInfo],
     per_chrom_bins: Vec<(String, Vec<f32>)>,
     bin_size: u32,
     output_path: &Path,
+    nthreads: u32,
 ) -> Result<()> {
-    // Chromsizes
-    let chromsizes_file = tempfile::NamedTempFile::new()?;
-    {
-        let mut writer = std::io::BufWriter::new(&chromsizes_file);
-        for chrom in chrom_info {
-            writeln!(writer, "{}\t{}", chrom.name, chrom.length)?;
-        }
+    if nthreads == 0 {
+        return Err(anyhow::anyhow!("nthreads must be > 0"));
     }
 
-    // Bedgraph
-    info!("Writing temporary bedgraph file");
-    let bedgraph_file = tempfile::NamedTempFile::new()?;
-    {
-        let mut w = std::io::BufWriter::new(&bedgraph_file);
-        for (chrom, bins) in per_chrom_bins {
-            let clen = chrom_info
-                .iter()
-                .find(|c| c.name == chrom)
-                .map(|c| c.length)
-                .unwrap_or(0);
-            write_bedgraph_bins(&mut w, &chrom, clen, bin_size, &bins)?;
+    let chrom_sizes = chrom_info
+        .iter()
+        .map(|chrom| (chrom.name.clone(), chrom.length))
+        .collect::<std::collections::HashMap<_, _>>();
+
+    let mut values = Vec::new();
+    for (idx, (chrom, bins)) in per_chrom_bins.iter().enumerate() {
+        let expected = chrom_info
+            .get(idx)
+            .with_context(|| format!("Missing chromosome metadata for {}", chrom))?;
+        if chrom != &expected.name {
+            return Err(anyhow::anyhow!(
+                "Chromosome order mismatch: expected {}, got {}",
+                expected.name,
+                chrom
+            ));
         }
+        push_bigwig_values_for_bins(&mut values, idx, expected.length, bin_size, bins)?;
     }
 
-    // Convert to BigWig
-    let args = bigtools::utils::cli::bedgraphtobigwig::BedGraphToBigWigArgs {
-        bedgraph: bedgraph_file.path().to_string_lossy().to_string(),
-        chromsizes: chromsizes_file.path().to_string_lossy().to_string(),
-        output: output_path.to_string_lossy().to_string(),
-        parallel: "auto".to_string(),
-        single_pass: true,
-        write_args: bigtools::utils::cli::BBIWriteArgs {
-            nthreads: 6,
-            nzooms: 10,
-            uncompressed: false,
-            sorted: "all".to_string(),
-            zooms: None,
-            block_size: DEFAULT_BLOCK_SIZE,
-            items_per_slot: DEFAULT_ITEMS_PER_SLOT,
-            inmemory: false,
-        },
-    };
+    let iter = values
+        .iter()
+        .map(|(chrom_idx, value)| (chrom_info[*chrom_idx].name.as_str(), *value));
+    let bed_iter = BedParserStreamingIterator::wrap_infallible_iter(iter, true);
 
-    info!("Writing output BigWig to {:?}", output_path);
-    bigtools::utils::cli::bedgraphtobigwig::bedgraphtobigwig(args)
-        .map_err(|e| anyhow::anyhow!("Error converting bedgraph to bigwig: {}", e))?;
+    info!("Writing output BigWig to {}", output_path.display());
+    let bw_writer = BigWigWrite::create_file(output_path, chrom_sizes)?;
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(nthreads as usize)
+        .build()?;
+    bw_writer.write(bed_iter, runtime)?;
 
     Ok(())
 }
@@ -567,12 +607,33 @@ pub fn compare_bigwigs<P>(
 where
     P: AsRef<Path> + std::fmt::Debug + Send + Sync,
 {
+    compare_bigwigs_with_threads(
+        bw1_path,
+        bw2_path,
+        output_path,
+        comparison,
+        bin_size,
+        pseudocount,
+        6,
+    )
+}
+
+/// Compare two BigWigs per-bin and emit a new BigWig with a configurable writer thread count.
+pub fn compare_bigwigs_with_threads<P>(
+    bw1_path: &P,
+    bw2_path: &Path,
+    output_path: &Path,
+    comparison: Comparison,
+    bin_size: u32,
+    pseudocount: Option<f64>,
+    nthreads: u32,
+) -> Result<()>
+where
+    P: AsRef<Path> + std::fmt::Debug + Send + Sync,
+{
     let chrom_info = bigtools::BigWigRead::open_file(bw1_path.as_ref())?
         .chroms()
-        .to_owned()
-        .into_iter()
-        .sorted_by(|a, b| a.name.cmp(&b.name))
-        .collect::<Vec<_>>();
+        .to_owned();
 
     // Small default avoids division-by-zero in ratio/log-ratio modes.
     let pc = pseudocount.unwrap_or(1e-12);
@@ -599,7 +660,7 @@ where
         .map(|(_, name, bins)| (name, bins))
         .collect::<Vec<_>>();
 
-    write_bedgraph_to_bigwig_from_bins(&chrom_info, per_chrom_bins, bin_size, output_path)
+    write_bigwig_from_bins(&chrom_info, per_chrom_bins, bin_size, output_path, nthreads)
 }
 
 /// Streamed Sum/Mean aggregation: avoids Vec<Vec<_>> and avoids allocating a 2D matrix.
@@ -636,16 +697,35 @@ pub fn aggregate_bigwigs<P>(
 where
     P: AsRef<Path> + std::fmt::Debug + Send + Sync,
 {
+    aggregate_bigwigs_with_threads(
+        bw_paths,
+        output_path,
+        aggregation_mode,
+        bin_size,
+        pseudocount,
+        6,
+    )
+}
+
+/// Aggregate multiple BigWigs per-bin and emit a new BigWig with a configurable writer thread count.
+pub fn aggregate_bigwigs_with_threads<P>(
+    bw_paths: &[P],
+    output_path: &Path,
+    aggregation_mode: AggregationMode,
+    bin_size: u32,
+    pseudocount: Option<f64>,
+    nthreads: u32,
+) -> Result<()>
+where
+    P: AsRef<Path> + std::fmt::Debug + Send + Sync,
+{
     if bw_paths.is_empty() {
         return Err(anyhow::anyhow!("At least one BigWig file is required"));
     }
 
     let chrom_info = bigtools::BigWigRead::open_file(bw_paths[0].as_ref())?
         .chroms()
-        .to_owned()
-        .into_iter()
-        .sorted_by(|a, b| a.name.cmp(&b.name))
-        .collect::<Vec<_>>();
+        .to_owned();
 
     let pc = pseudocount.unwrap_or(0.0);
     let bw_refs: Vec<&Path> = bw_paths.iter().map(|p| p.as_ref()).collect();
@@ -681,7 +761,7 @@ where
         .map(|(_, name, bins)| (name, bins))
         .collect::<Vec<_>>();
 
-    write_bedgraph_to_bigwig_from_bins(&chrom_info, per_chrom_bins, bin_size, output_path)
+    write_bigwig_from_bins(&chrom_info, per_chrom_bins, bin_size, output_path, nthreads)
 }
 
 #[cfg(test)]
@@ -695,45 +775,22 @@ mod tests {
         chrom_map: HashMap<String, u32>,
         values: Vec<(String, u32, u32, f32)>,
     ) -> Result<()> {
-        // Write chrom sizes
-        let chromsizes_file = tempfile::NamedTempFile::new()?;
-        {
-            let mut writer = std::io::BufWriter::new(&chromsizes_file);
-            for (chrom, size) in &chrom_map {
-                writeln!(writer, "{}\t{}", chrom, size)?;
-            }
-        }
-
-        // Write bedgraph
-        let bedgraph_file = tempfile::NamedTempFile::new()?;
-        {
-            let mut writer = std::io::BufWriter::new(&bedgraph_file);
-            for (chrom, start, end, value) in values {
-                writeln!(writer, "{}\t{}\t{}\t{}", chrom, start, end, value)?;
-            }
-        }
-
-        // Convert
-        let args = bigtools::utils::cli::bedgraphtobigwig::BedGraphToBigWigArgs {
-            bedgraph: bedgraph_file.path().to_string_lossy().to_string(),
-            chromsizes: chromsizes_file.path().to_string_lossy().to_string(),
-            output: path.to_string_lossy().to_string(),
-            parallel: "auto".to_string(),
-            single_pass: true,
-            write_args: bigtools::utils::cli::BBIWriteArgs {
-                nthreads: 1,
-                nzooms: 0,
-                uncompressed: false,
-                sorted: "all".to_string(),
-                zooms: None,
-                block_size: 256,
-                items_per_slot: 64,
-                inmemory: false,
-            },
-        };
-
-        bigtools::utils::cli::bedgraphtobigwig::bedgraphtobigwig(args)
-            .map_err(|e| anyhow::anyhow!("Error: {}", e))?;
+        let iter = values.iter().map(|(chrom, start, end, value)| {
+            (
+                chrom.as_str(),
+                Value {
+                    start: *start,
+                    end: *end,
+                    value: *value,
+                },
+            )
+        });
+        let bed_iter = BedParserStreamingIterator::wrap_infallible_iter(iter, true);
+        let bw_writer = BigWigWrite::create_file(path, chrom_map)?;
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .build()?;
+        bw_writer.write(bed_iter, runtime)?;
 
         Ok(())
     }
@@ -801,13 +858,14 @@ mod tests {
         ];
         create_dummy_bigwig(&bw2_path, chrom_map.clone(), values2)?;
 
-        compare_bigwigs(
+        compare_bigwigs_with_threads(
             &bw1_path,
             &bw2_path,
             &out_path,
             Comparison::Subtraction,
             10,
             None,
+            1,
         )?;
 
         assert!(out_path.exists());
@@ -851,7 +909,15 @@ mod tests {
         let values2 = vec![("chr1".to_string(), 0, 100, 5.0)];
         create_dummy_bigwig(&bw2_path, chrom_map.clone(), values2)?;
 
-        compare_bigwigs(&bw1_path, &bw2_path, &out_path, Comparison::Ratio, 10, None)?;
+        compare_bigwigs_with_threads(
+            &bw1_path,
+            &bw2_path,
+            &out_path,
+            Comparison::Ratio,
+            10,
+            None,
+            1,
+        )?;
 
         assert!(out_path.exists());
 
@@ -890,29 +956,32 @@ mod tests {
         create_dummy_bigwig(&bw1_path, chrom_map.clone(), values.clone())?;
         create_dummy_bigwig(&bw2_path, chrom_map.clone(), values)?;
 
-        compare_bigwigs(
+        compare_bigwigs_with_threads(
             &bw1_path,
             &bw2_path,
             &out_sub,
             Comparison::Subtraction,
             10,
             None,
+            1,
         )?;
-        compare_bigwigs(
+        compare_bigwigs_with_threads(
             &bw1_path,
             &bw2_path,
             &out_ratio,
             Comparison::Ratio,
             10,
             None,
+            1,
         )?;
-        compare_bigwigs(
+        compare_bigwigs_with_threads(
             &bw1_path,
             &bw2_path,
             &out_logratio,
             Comparison::LogRatio,
             10,
             None,
+            1,
         )?;
 
         // Subtraction should be ~0 everywhere.
@@ -972,21 +1041,23 @@ mod tests {
             vec![("chr1".to_string(), 0, 100, 0.0)],
         )?;
 
-        compare_bigwigs(
+        compare_bigwigs_with_threads(
             &bw1_path,
             &bw2_path,
             &out_ratio,
             Comparison::Ratio,
             10,
             Some(1e-3),
+            1,
         )?;
-        compare_bigwigs(
+        compare_bigwigs_with_threads(
             &bw1_path,
             &bw2_path,
             &out_logratio,
             Comparison::LogRatio,
             10,
             Some(1e-3),
+            1,
         )?;
 
         let mut reader = BigWigRead::open_file(out_ratio.to_str().unwrap())?;
@@ -1012,6 +1083,109 @@ mod tests {
                 iv.value
             );
         }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_compare_bigwigs_preserves_first_input_chromosome_order() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let bw1_path = dir.path().join("test1.bw");
+        let bw2_path = dir.path().join("test2.bw");
+        let out_path = dir.path().join("out.bw");
+
+        let mut chrom_map = HashMap::new();
+        chrom_map.insert("chr2".to_string(), 100);
+        chrom_map.insert("chr1".to_string(), 100);
+
+        create_dummy_bigwig(
+            &bw1_path,
+            chrom_map.clone(),
+            vec![
+                ("chr2".to_string(), 0, 100, 4.0),
+                ("chr1".to_string(), 0, 100, 10.0),
+            ],
+        )?;
+        create_dummy_bigwig(
+            &bw2_path,
+            chrom_map,
+            vec![
+                ("chr2".to_string(), 0, 100, 1.0),
+                ("chr1".to_string(), 0, 100, 3.0),
+            ],
+        )?;
+
+        compare_bigwigs_with_threads(
+            &bw1_path,
+            &bw2_path,
+            &out_path,
+            Comparison::Subtraction,
+            100,
+            None,
+            1,
+        )?;
+
+        let reader = BigWigRead::open_file(out_path.to_str().unwrap())?;
+        let chroms = reader
+            .chroms()
+            .iter()
+            .map(|chrom| chrom.name.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(chroms, vec!["chr2", "chr1"]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_aggregate_bigwigs_mean_preserves_first_input_chromosome_order() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let bw1_path = dir.path().join("test1.bw");
+        let bw2_path = dir.path().join("test2.bw");
+        let out_path = dir.path().join("out.bw");
+
+        let mut chrom_map = HashMap::new();
+        chrom_map.insert("chr2".to_string(), 100);
+        chrom_map.insert("chr1".to_string(), 100);
+
+        create_dummy_bigwig(
+            &bw1_path,
+            chrom_map.clone(),
+            vec![
+                ("chr2".to_string(), 0, 100, 2.0),
+                ("chr1".to_string(), 0, 100, 8.0),
+            ],
+        )?;
+        create_dummy_bigwig(
+            &bw2_path,
+            chrom_map,
+            vec![
+                ("chr2".to_string(), 0, 100, 6.0),
+                ("chr1".to_string(), 0, 100, 12.0),
+            ],
+        )?;
+
+        aggregate_bigwigs_with_threads(
+            &[bw1_path, bw2_path],
+            &out_path,
+            AggregationMode::Mean,
+            100,
+            None,
+            1,
+        )?;
+
+        let mut reader = BigWigRead::open_file(out_path.to_str().unwrap())?;
+        let chroms = reader
+            .chroms()
+            .iter()
+            .map(|chrom| chrom.name.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(chroms, vec!["chr2", "chr1"]);
+
+        let chr2 = reader
+            .get_interval("chr2", 0, 100)?
+            .collect::<Result<Vec<_>, _>>()?;
+        assert_eq!(chr2.len(), 1);
+        assert!((chr2[0].value - 4.0).abs() < 1e-5);
 
         Ok(())
     }
