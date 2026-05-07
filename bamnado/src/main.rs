@@ -272,11 +272,11 @@ enum Commands {
         pseudocount: Option<f64>,
 
         /// Scale factor applied to bw1 before comparison.
-        #[arg(long, value_name = "FLOAT")]
+        #[arg(long, value_name = "FLOAT", allow_negative_numbers = true)]
         scale_factor_bw1: Option<f64>,
 
         /// Scale factor applied to bw2 before comparison.
-        #[arg(long, value_name = "FLOAT")]
+        #[arg(long, value_name = "FLOAT", allow_negative_numbers = true)]
         scale_factor_bw2: Option<f64>,
 
         /// Number of threads to use for BigWig writing.
@@ -308,7 +308,7 @@ enum Commands {
         pseudocount: Option<f64>,
 
         /// Per-file scale factors (one per --bigwigs input, in order).
-        #[arg(long, num_args = 0.., value_name = "FLOAT")]
+        #[arg(long, num_args = 0.., value_name = "FLOAT", allow_negative_numbers = true)]
         scale_factors: Vec<f64>,
 
         /// Number of threads to use for BigWig writing.
