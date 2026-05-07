@@ -206,16 +206,32 @@ fn binned_means_single_bw(
 // Compare (2-signal sweep)
 // -----------------------------
 
+/// Options for pairwise BigWig comparison.
+pub struct CompareOptions {
+    pub comparison: Comparison,
+    pub bin_size: u32,
+    pub pseudocount: Option<f64>,
+    pub scale_factor1: Option<f64>,
+    pub scale_factor2: Option<f64>,
+}
+
+struct CompareConfig<'a> {
+    bin_size: u32,
+    comparison: &'a Comparison,
+    pseudocount: f64,
+    scale1: f64,
+    scale2: f64,
+}
+
 /// Sweep two signals in lockstep and compute per-bin comparison values.
 fn binned_compare_two_bw(
     bw1: &Path,
     bw2: &Path,
     chrom: &str,
     chrom_len: u32,
-    bin_size: u32,
-    comparison: &Comparison,
-    pseudocount: f64,
+    cfg: &CompareConfig<'_>,
 ) -> Result<Vec<f32>> {
+    let bin_size = cfg.bin_size;
     let mut r1 = bigtools::BigWigRead::open_file(bw1)?;
     let mut r2 = bigtools::BigWigRead::open_file(bw2)?;
     let a = load_intervals_for_chrom(&mut r1, chrom, chrom_len)?;
@@ -236,12 +252,13 @@ fn binned_compare_two_bw(
             next = (pos + 1).min(chrom_len);
         }
 
-        let out_val = match comparison {
-            Comparison::Subtraction => (v1 as f64) - (v2 as f64),
-            Comparison::Ratio => (v1 as f64) / ((v2 as f64) + pseudocount),
-            Comparison::LogRatio => {
-                (((v1 as f64) + pseudocount) / ((v2 as f64) + pseudocount)).ln()
-            }
+        let s1 = v1 as f64 * cfg.scale1;
+        let s2 = v2 as f64 * cfg.scale2;
+        let pc = cfg.pseudocount;
+        let out_val = match cfg.comparison {
+            Comparison::Subtraction => s1 - s2,
+            Comparison::Ratio => s1 / (s2 + pc),
+            Comparison::LogRatio => ((s1 + pc) / (s2 + pc)).ln(),
         };
 
         acc.add_segment(pos, next, out_val);
@@ -263,6 +280,7 @@ fn binned_extrema_multi_bw(
     bin_size: u32,
     want_max: bool,
     pseudocount: f64, // added to each signal before extrema (matches original intent)
+    scale_factors: &[f64],
 ) -> Result<Vec<f32>> {
     let mut readers = bw_paths
         .iter()
@@ -289,10 +307,10 @@ fn binned_extrema_multi_bw(
             f64::INFINITY
         };
 
-        for c in cursors.iter_mut() {
+        for (ci, c) in cursors.iter_mut().enumerate() {
             let (v, n) = c.fetch(pos, chrom_len);
             next = next.min(n);
-            let vv = (v as f64) + pseudocount;
+            let vv = (v as f64) * scale_factors[ci] + pseudocount;
             ext = if want_max { ext.max(vv) } else { ext.min(vv) };
         }
 
@@ -405,6 +423,7 @@ fn binned_median_multi_bw(
     chrom_len: u32,
     bin_size: u32,
     pseudocount: f64,
+    scale_factors: &[f64],
 ) -> Result<Vec<f32>> {
     let mut readers = bw_paths
         .iter()
@@ -412,12 +431,10 @@ fn binned_median_multi_bw(
         .collect::<Result<Vec<_>, _>>()?;
 
     let mut all_ivs: Vec<Vec<Iv>> = Vec::with_capacity(readers.len());
-    for r in readers.iter_mut() {
+    for (bw_i, r) in readers.iter_mut().enumerate() {
         let mut ivs = load_intervals_for_chrom(r, chrom, chrom_len)?;
-        if pseudocount != 0.0 {
-            for iv in ivs.iter_mut() {
-                iv.value = (iv.value as f64 + pseudocount) as f32;
-            }
+        for iv in ivs.iter_mut() {
+            iv.value = (iv.value as f64 * scale_factors[bw_i] + pseudocount) as f32;
         }
         all_ivs.push(ivs);
     }
@@ -600,22 +617,12 @@ pub fn compare_bigwigs<P>(
     bw1_path: &P,
     bw2_path: &Path,
     output_path: &Path,
-    comparison: Comparison,
-    bin_size: u32,
-    pseudocount: Option<f64>,
+    opts: CompareOptions,
 ) -> Result<()>
 where
     P: AsRef<Path> + std::fmt::Debug + Send + Sync,
 {
-    compare_bigwigs_with_threads(
-        bw1_path,
-        bw2_path,
-        output_path,
-        comparison,
-        bin_size,
-        pseudocount,
-        6,
-    )
+    compare_bigwigs_with_threads(bw1_path, bw2_path, output_path, opts, 6)
 }
 
 /// Compare two BigWigs per-bin and emit a new BigWig with a configurable writer thread count.
@@ -623,9 +630,7 @@ pub fn compare_bigwigs_with_threads<P>(
     bw1_path: &P,
     bw2_path: &Path,
     output_path: &Path,
-    comparison: Comparison,
-    bin_size: u32,
-    pseudocount: Option<f64>,
+    opts: CompareOptions,
     nthreads: u32,
 ) -> Result<()>
 where
@@ -635,22 +640,21 @@ where
         .chroms()
         .to_owned();
 
-    // Small default avoids division-by-zero in ratio/log-ratio modes.
-    let pc = pseudocount.unwrap_or(1e-12);
+    let cfg = CompareConfig {
+        bin_size: opts.bin_size,
+        comparison: &opts.comparison,
+        // Small default avoids division-by-zero in ratio/log-ratio modes.
+        pseudocount: opts.pseudocount.unwrap_or(1e-12),
+        scale1: opts.scale_factor1.unwrap_or(1.0),
+        scale2: opts.scale_factor2.unwrap_or(1.0),
+    };
 
     let mut per_chrom_bins = chrom_info
         .par_iter()
         .enumerate()
         .map(|(idx, chr)| {
-            let bins = binned_compare_two_bw(
-                bw1_path.as_ref(),
-                bw2_path,
-                &chr.name,
-                chr.length,
-                bin_size,
-                &comparison,
-                pc,
-            )?;
+            let bins =
+                binned_compare_two_bw(bw1_path.as_ref(), bw2_path, &chr.name, chr.length, &cfg)?;
             Ok((idx, chr.name.clone(), bins))
         })
         .collect::<Result<Vec<_>>>()?;
@@ -660,7 +664,13 @@ where
         .map(|(_, name, bins)| (name, bins))
         .collect::<Vec<_>>();
 
-    write_bigwig_from_bins(&chrom_info, per_chrom_bins, bin_size, output_path, nthreads)
+    write_bigwig_from_bins(
+        &chrom_info,
+        per_chrom_bins,
+        opts.bin_size,
+        output_path,
+        nthreads,
+    )
 }
 
 /// Streamed Sum/Mean aggregation: avoids Vec<Vec<_>> and avoids allocating a 2D matrix.
@@ -671,14 +681,15 @@ fn binned_sum_or_mean(
     bin_size: u32,
     pseudocount: f64,
     want_mean: bool,
+    scale_factors: &[f64],
 ) -> Result<Vec<f32>> {
     let nb = n_bins(chrom_len, bin_size);
     let mut acc = vec![0f64; nb];
 
-    for p in bw_refs {
+    for (bw_i, p) in bw_refs.iter().enumerate() {
         let bins = binned_means_single_bw(p, chrom, chrom_len, bin_size)?;
         for (i, &x) in bins.iter().enumerate() {
-            acc[i] += (x as f64) + pseudocount;
+            acc[i] += (x as f64) * scale_factors[bw_i] + pseudocount;
         }
     }
 
@@ -693,6 +704,7 @@ pub fn aggregate_bigwigs<P>(
     aggregation_mode: AggregationMode,
     bin_size: u32,
     pseudocount: Option<f64>,
+    scale_factors: Option<Vec<f64>>,
 ) -> Result<()>
 where
     P: AsRef<Path> + std::fmt::Debug + Send + Sync,
@@ -703,6 +715,7 @@ where
         aggregation_mode,
         bin_size,
         pseudocount,
+        scale_factors,
         6,
     )
 }
@@ -714,6 +727,7 @@ pub fn aggregate_bigwigs_with_threads<P>(
     aggregation_mode: AggregationMode,
     bin_size: u32,
     pseudocount: Option<f64>,
+    scale_factors: Option<Vec<f64>>,
     nthreads: u32,
 ) -> Result<()>
 where
@@ -723,11 +737,22 @@ where
         return Err(anyhow::anyhow!("At least one BigWig file is required"));
     }
 
+    if let Some(ref sfs) = scale_factors
+        && sfs.len() != bw_paths.len()
+    {
+        return Err(anyhow::anyhow!(
+            "--scale-factors count ({}) must match input BigWig count ({})",
+            sfs.len(),
+            bw_paths.len()
+        ));
+    }
+
     let chrom_info = bigtools::BigWigRead::open_file(bw_paths[0].as_ref())?
         .chroms()
         .to_owned();
 
     let pc = pseudocount.unwrap_or(0.0);
+    let sfs: Vec<f64> = scale_factors.unwrap_or_else(|| vec![1.0; bw_paths.len()]);
     let bw_refs: Vec<&Path> = bw_paths.iter().map(|p| p.as_ref()).collect();
 
     let mut per_chrom_bins = chrom_info
@@ -737,19 +762,19 @@ where
             let clen = chr.length;
             let bins = match aggregation_mode {
                 AggregationMode::Sum => {
-                    binned_sum_or_mean(&bw_refs, &chr.name, clen, bin_size, pc, false)?
+                    binned_sum_or_mean(&bw_refs, &chr.name, clen, bin_size, pc, false, &sfs)?
                 }
                 AggregationMode::Mean => {
-                    binned_sum_or_mean(&bw_refs, &chr.name, clen, bin_size, pc, true)?
+                    binned_sum_or_mean(&bw_refs, &chr.name, clen, bin_size, pc, true, &sfs)?
                 }
                 AggregationMode::Max => {
-                    binned_extrema_multi_bw(&bw_refs, &chr.name, clen, bin_size, true, pc)?
+                    binned_extrema_multi_bw(&bw_refs, &chr.name, clen, bin_size, true, pc, &sfs)?
                 }
                 AggregationMode::Min => {
-                    binned_extrema_multi_bw(&bw_refs, &chr.name, clen, bin_size, false, pc)?
+                    binned_extrema_multi_bw(&bw_refs, &chr.name, clen, bin_size, false, pc, &sfs)?
                 }
                 AggregationMode::Median => {
-                    binned_median_multi_bw(&bw_refs, &chr.name, clen, bin_size, pc)?
+                    binned_median_multi_bw(&bw_refs, &chr.name, clen, bin_size, pc, &sfs)?
                 }
             };
             Ok((idx, chr.name.clone(), bins))
@@ -862,9 +887,13 @@ mod tests {
             &bw1_path,
             &bw2_path,
             &out_path,
-            Comparison::Subtraction,
-            10,
-            None,
+            CompareOptions {
+                comparison: Comparison::Subtraction,
+                bin_size: 10,
+                pseudocount: None,
+                scale_factor1: None,
+                scale_factor2: None,
+            },
             1,
         )?;
 
@@ -913,9 +942,13 @@ mod tests {
             &bw1_path,
             &bw2_path,
             &out_path,
-            Comparison::Ratio,
-            10,
-            None,
+            CompareOptions {
+                comparison: Comparison::Ratio,
+                bin_size: 10,
+                pseudocount: None,
+                scale_factor1: None,
+                scale_factor2: None,
+            },
             1,
         )?;
 
@@ -960,27 +993,39 @@ mod tests {
             &bw1_path,
             &bw2_path,
             &out_sub,
-            Comparison::Subtraction,
-            10,
-            None,
+            CompareOptions {
+                comparison: Comparison::Subtraction,
+                bin_size: 10,
+                pseudocount: None,
+                scale_factor1: None,
+                scale_factor2: None,
+            },
             1,
         )?;
         compare_bigwigs_with_threads(
             &bw1_path,
             &bw2_path,
             &out_ratio,
-            Comparison::Ratio,
-            10,
-            None,
+            CompareOptions {
+                comparison: Comparison::Ratio,
+                bin_size: 10,
+                pseudocount: None,
+                scale_factor1: None,
+                scale_factor2: None,
+            },
             1,
         )?;
         compare_bigwigs_with_threads(
             &bw1_path,
             &bw2_path,
             &out_logratio,
-            Comparison::LogRatio,
-            10,
-            None,
+            CompareOptions {
+                comparison: Comparison::LogRatio,
+                bin_size: 10,
+                pseudocount: None,
+                scale_factor1: None,
+                scale_factor2: None,
+            },
             1,
         )?;
 
@@ -1045,18 +1090,26 @@ mod tests {
             &bw1_path,
             &bw2_path,
             &out_ratio,
-            Comparison::Ratio,
-            10,
-            Some(1e-3),
+            CompareOptions {
+                comparison: Comparison::Ratio,
+                bin_size: 10,
+                pseudocount: Some(1e-3),
+                scale_factor1: None,
+                scale_factor2: None,
+            },
             1,
         )?;
         compare_bigwigs_with_threads(
             &bw1_path,
             &bw2_path,
             &out_logratio,
-            Comparison::LogRatio,
-            10,
-            Some(1e-3),
+            CompareOptions {
+                comparison: Comparison::LogRatio,
+                bin_size: 10,
+                pseudocount: Some(1e-3),
+                scale_factor1: None,
+                scale_factor2: None,
+            },
             1,
         )?;
 
@@ -1119,9 +1172,13 @@ mod tests {
             &bw1_path,
             &bw2_path,
             &out_path,
-            Comparison::Subtraction,
-            100,
-            None,
+            CompareOptions {
+                comparison: Comparison::Subtraction,
+                bin_size: 100,
+                pseudocount: None,
+                scale_factor1: None,
+                scale_factor2: None,
+            },
             1,
         )?;
 
@@ -1169,6 +1226,7 @@ mod tests {
             &out_path,
             AggregationMode::Mean,
             100,
+            None,
             None,
             1,
         )?;

@@ -271,6 +271,14 @@ enum Commands {
         #[arg(long, value_name = "FLOAT")]
         pseudocount: Option<f64>,
 
+        /// Scale factor applied to bw1 before comparison.
+        #[arg(long, value_name = "FLOAT")]
+        scale_factor_bw1: Option<f64>,
+
+        /// Scale factor applied to bw2 before comparison.
+        #[arg(long, value_name = "FLOAT")]
+        scale_factor_bw2: Option<f64>,
+
         /// Number of threads to use for BigWig writing.
         #[arg(long, default_value = "6")]
         threads: u32,
@@ -298,6 +306,10 @@ enum Commands {
         /// Value added to all inputs before aggregation.
         #[arg(long, value_name = "FLOAT")]
         pseudocount: Option<f64>,
+
+        /// Per-file scale factors (one per --bigwigs input, in order).
+        #[arg(long, num_args = 0.., value_name = "FLOAT")]
+        scale_factors: Vec<f64>,
 
         /// Number of threads to use for BigWig writing.
         #[arg(long, default_value = "6")]
@@ -869,15 +881,21 @@ fn main() -> Result<()> {
             bin_size,
             chunk_size: _,
             pseudocount,
+            scale_factor_bw1,
+            scale_factor_bw2,
             threads,
         } => {
             bamnado::bigwig_compare::compare_bigwigs_with_threads(
                 bw1,
                 bw2,
                 output,
-                comparison.clone(),
-                *bin_size,
-                *pseudocount,
+                bamnado::bigwig_compare::CompareOptions {
+                    comparison: comparison.clone(),
+                    bin_size: *bin_size,
+                    pseudocount: *pseudocount,
+                    scale_factor1: *scale_factor_bw1,
+                    scale_factor2: *scale_factor_bw2,
+                },
                 *threads,
             )
             .context("Failed to compare BigWig files")?;
@@ -894,11 +912,18 @@ fn main() -> Result<()> {
             method,
             bin_size,
             pseudocount,
+            scale_factors,
             threads,
         } => {
             if bigwigs.is_empty() {
                 return Err(anyhow::anyhow!("At least one BigWig file must be provided"));
             }
+
+            let sfs = if scale_factors.is_empty() {
+                None
+            } else {
+                Some(scale_factors.clone())
+            };
 
             bamnado::bigwig_compare::aggregate_bigwigs_with_threads(
                 bigwigs,
@@ -906,6 +931,7 @@ fn main() -> Result<()> {
                 method.clone(),
                 *bin_size,
                 *pseudocount,
+                sfs,
                 *threads,
             )
             .context("Failed to aggregate BigWig files")?;
