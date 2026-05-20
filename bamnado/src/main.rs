@@ -398,6 +398,20 @@ enum Commands {
         /// Output format.
         #[arg(long, value_enum, default_value = "table")]
         format: InferScaleFormat,
+
+        /// Write output to FILE instead of stdout.
+        #[arg(short, long, value_name = "FILE")]
+        output: Option<PathBuf>,
+
+        /// Stop scanning a chromosome after N consecutive intervals with no new minimum.
+        /// Set to 0 to disable early exit (full scan). Default 50000.
+        #[arg(long, value_name = "N", default_value = "50000")]
+        min_stable_streak: u32,
+
+        /// Maximum interval start positions collected for bin-size (GCD) inference.
+        /// Default 512 — GCD stabilises within the first few entries.
+        #[arg(long, value_name = "N", default_value = "512")]
+        max_starts: usize,
     },
 }
 
@@ -1018,10 +1032,26 @@ fn main() -> Result<()> {
                 }
             }
         }
-        Commands::InferScale { bigwig, format } => {
-            let result = bamnado::bigwig_infer_scale::infer_scale_factor(bigwig)
+        Commands::InferScale {
+            bigwig,
+            format,
+            output,
+            min_stable_streak,
+            max_starts,
+        } => {
+            let config = bamnado::bigwig_infer_scale::InferScaleConfig {
+                min_stable_streak: if *min_stable_streak == 0 {
+                    u32::MAX
+                } else {
+                    *min_stable_streak
+                },
+                max_starts: *max_starts,
+            };
+            let result = bamnado::bigwig_infer_scale::infer_scale_factor(bigwig, &config)
                 .context("Failed to infer scale factor from BigWig")?;
 
+            // Build output string then write to file or stdout.
+            let mut buf = String::new();
             match format {
                 InferScaleFormat::Table => {
                     let mut table = Table::new();
@@ -1075,65 +1105,73 @@ fn main() -> Result<()> {
                         ]);
                     }
 
-                    println!("{table}");
+                    use std::fmt::Write as _;
+                    writeln!(buf, "{table}").unwrap();
 
-                    let mut warnings: Vec<&str> = Vec::new();
-                    if result.warnings.pseudocount_detected {
-                        warnings
-                            .push("pseudocount detected — scale factor corrected using second_min");
-                    }
-                    if result.warnings.smoothing_detected {
-                        warnings.push("ratio is non-integer — smoothing may have been applied; recovery is approximate");
-                    }
-                    if result.warnings.variable_bin_sizes {
-                        warnings.push("variable bin sizes detected — RPKM reversal unreliable");
-                    }
-                    if result.warnings.min_from_small_chrom {
-                        warnings.push(
-                            "minimum value came from a small chromosome — may be artefactual",
-                        );
-                    }
-                    for w in warnings {
+                    // Warnings always go to stderr regardless of --output.
+                    for w in result.warnings.messages() {
                         eprintln!("Warning: {w}");
                     }
                 }
                 InferScaleFormat::Tsv => {
-                    println!("field\tvalue");
-                    println!("normalisation\t{}", result.norm_method);
-                    println!("scale_factor\t{:.6e}", result.scale_factor);
-                    println!("to_raw\tvalue × {:.6e}", result.scale_factor);
-                    println!("library_size\t{:.0}", result.library_size);
-                    println!("bin_size\t{}", result.bin_size);
-                    println!("min_val\t{:.6e}", result.min_val);
-                    println!(
+                    use std::fmt::Write as _;
+                    writeln!(buf, "field\tvalue").unwrap();
+                    writeln!(buf, "normalisation\t{}", result.norm_method).unwrap();
+                    writeln!(buf, "scale_factor\t{:.6e}", result.scale_factor).unwrap();
+                    writeln!(buf, "to_raw\tvalue × {:.6e}", result.scale_factor).unwrap();
+                    writeln!(buf, "library_size\t{:.0}", result.library_size).unwrap();
+                    writeln!(buf, "bin_size\t{}", result.bin_size).unwrap();
+                    writeln!(buf, "min_val\t{:.6e}", result.min_val).unwrap();
+                    writeln!(
+                        buf,
                         "second_min_val\t{}",
                         if result.second_min_val < f64::MAX {
                             format!("{:.6e}", result.second_min_val)
                         } else {
                             "n/a".to_string()
                         }
-                    );
-                    println!(
+                    )
+                    .unwrap();
+                    writeln!(
+                        buf,
                         "ratio\t{}",
                         if result.ratio.is_nan() {
                             "n/a".to_string()
                         } else {
                             format!("{:.4}", result.ratio)
                         }
-                    );
-                    println!(
+                    )
+                    .unwrap();
+                    writeln!(
+                        buf,
                         "pseudocount\t{}",
                         result
                             .pseudocount
                             .map(|p| format!("{:.4}", p))
                             .unwrap_or_else(|| "none".to_string())
-                    );
-                    println!("confident\t{}", if result.confident { "yes" } else { "no" });
-                    println!("chroms_scanned\t{}", result.chroms_scanned);
+                    )
+                    .unwrap();
+                    writeln!(
+                        buf,
+                        "confident\t{}",
+                        if result.confident { "yes" } else { "no" }
+                    )
+                    .unwrap();
+                    writeln!(buf, "chroms_scanned\t{}", result.chroms_scanned).unwrap();
+                    for w in result.warnings.messages() {
+                        writeln!(buf, "warning\t{w}").unwrap();
+                    }
                 }
                 InferScaleFormat::Json => {
-                    println!("{}", serde_json::to_string_pretty(&result)?);
+                    buf = serde_json::to_string_pretty(&result)?;
+                    buf.push('\n');
                 }
+            }
+
+            match output {
+                Some(path) => std::fs::write(path, &buf)
+                    .with_context(|| format!("Cannot write to {}", path.display()))?,
+                None => print!("{buf}"),
             }
         }
     }
