@@ -4,7 +4,6 @@
     "bamnado": {
       "release-type": "rust",
       "package-name": "bamnado",
-      "changelog-path": "../CHANGELOG.md",
       "include-component-in-tag": false,
       "extra-files": [
         "bamnado-python/Cargo.toml",
