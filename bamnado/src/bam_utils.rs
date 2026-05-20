@@ -387,6 +387,10 @@ impl BamStats {
     }
 
     /// Splits the genome into chunks for parallel processing.
+    ///
+    /// All coordinates use 1-based positions (noodles/SAM convention). BAM index queries
+    /// require 1-based positions; conversion to 0-based happens only when writing output
+    /// formats such as BigWig (see `BamPileup::to_bigwig`).
     pub fn genome_chunks(&self, bin_size: u64) -> Result<Vec<Region>> {
         let genome_chunk_length = self.estimate_genome_chunk_length(bin_size)?;
         let chrom_chunks = self
@@ -417,6 +421,8 @@ impl BamStats {
     }
 
     /// Splits a specific chromosome into chunks.
+    ///
+    /// All coordinates use 1-based positions (noodles/SAM convention). See `genome_chunks`.
     pub fn chromosome_chunks(&self, chrom: &str, bin_size: u64) -> Result<Vec<Region>> {
         let genome_chunk_length = self.estimate_genome_chunk_length(bin_size)?;
         let stats = self

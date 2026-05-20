@@ -387,6 +387,24 @@ enum Commands {
         #[arg(long, action = clap::ArgAction::SetTrue)]
         tn5_shift: bool,
     },
+
+    /// Infer scaling factor and library size from a normalised BigWig file.
+    #[command(name = "bigwig-infer-scale", visible_alias = "infer-scale")]
+    InferScale {
+        /// Input BigWig file (CPM or RPKM normalised).
+        #[arg(short, long, value_name = "BW")]
+        bigwig: PathBuf,
+
+        /// Output format.
+        #[arg(long, value_enum, default_value = "table")]
+        format: InferScaleFormat,
+    },
+}
+
+#[derive(Debug, Clone, clap::ValueEnum)]
+enum InferScaleFormat {
+    Table,
+    Tsv,
 }
 
 // Helper functions to reduce code duplication
@@ -996,6 +1014,119 @@ fn main() -> Result<()> {
                     w.include_header(false)
                         .with_separator(b'\t')
                         .finish(&mut out_df)?;
+                }
+            }
+        }
+        Commands::InferScale { bigwig, format } => {
+            let result = bamnado::bigwig_infer_scale::infer_scale_factor(bigwig)
+                .context("Failed to infer scale factor from BigWig")?;
+
+            match format {
+                InferScaleFormat::Table => {
+                    let mut table = Table::new();
+                    table
+                        .load_preset(UTF8_FULL)
+                        .apply_modifier(UTF8_ROUND_CORNERS)
+                        .set_content_arrangement(ContentArrangement::Dynamic)
+                        .set_header(vec!["field", "value"]);
+
+                    let rows: Vec<(&str, String)> = vec![
+                        ("normalisation", result.norm_method.to_string()),
+                        ("scale_factor", format!("{:.6e}", result.scale_factor)),
+                        ("library_size", format!("{:.0}", result.library_size)),
+                        ("bin_size", format!("{} bp", result.bin_size)),
+                        ("min_val", format!("{:.6e}", result.min_val)),
+                        (
+                            "second_min_val",
+                            if result.second_min_val < f64::MAX {
+                                format!("{:.6e}", result.second_min_val)
+                            } else {
+                                "n/a".to_string()
+                            },
+                        ),
+                        (
+                            "ratio",
+                            if result.ratio.is_nan() {
+                                "n/a".to_string()
+                            } else {
+                                format!("{:.4}", result.ratio)
+                            },
+                        ),
+                        (
+                            "pseudocount",
+                            result
+                                .pseudocount
+                                .map(|p| format!("{:.4}", p))
+                                .unwrap_or_else(|| "none".to_string()),
+                        ),
+                        (
+                            "confident",
+                            if result.confident { "yes" } else { "no" }.to_string(),
+                        ),
+                        ("chroms_scanned", result.chroms_scanned.to_string()),
+                    ];
+
+                    for (label, value) in &rows {
+                        table.add_row(vec![
+                            Cell::new(label),
+                            Cell::new(value).set_alignment(CellAlignment::Right),
+                        ]);
+                    }
+
+                    println!("{table}");
+
+                    let mut warnings: Vec<&str> = Vec::new();
+                    if result.warnings.pseudocount_detected {
+                        warnings
+                            .push("pseudocount detected — scale factor corrected using second_min");
+                    }
+                    if result.warnings.smoothing_detected {
+                        warnings.push("ratio is non-integer — smoothing may have been applied; recovery is approximate");
+                    }
+                    if result.warnings.variable_bin_sizes {
+                        warnings.push("variable bin sizes detected — RPKM reversal unreliable");
+                    }
+                    if result.warnings.min_from_small_chrom {
+                        warnings.push(
+                            "minimum value came from a small chromosome — may be artefactual",
+                        );
+                    }
+                    for w in warnings {
+                        eprintln!("Warning: {w}");
+                    }
+                }
+                InferScaleFormat::Tsv => {
+                    println!("field\tvalue");
+                    println!("normalisation\t{}", result.norm_method);
+                    println!("scale_factor\t{:.6e}", result.scale_factor);
+                    println!("library_size\t{:.0}", result.library_size);
+                    println!("bin_size\t{}", result.bin_size);
+                    println!("min_val\t{:.6e}", result.min_val);
+                    println!(
+                        "second_min_val\t{}",
+                        if result.second_min_val < f64::MAX {
+                            format!("{:.6e}", result.second_min_val)
+                        } else {
+                            "n/a".to_string()
+                        }
+                    );
+                    println!(
+                        "ratio\t{}",
+                        if result.ratio.is_nan() {
+                            "n/a".to_string()
+                        } else {
+                            format!("{:.4}", result.ratio)
+                        }
+                    );
+                    println!(
+                        "pseudocount\t{}",
+                        result
+                            .pseudocount
+                            .map(|p| format!("{:.4}", p))
+                            .unwrap_or_else(|| "none".to_string())
+                    );
+                    println!("confident\t{}", if result.confident { "yes" } else { "no" });
+                    println!("chroms_scanned\t{}", result.chroms_scanned);
                 }
             }
         }

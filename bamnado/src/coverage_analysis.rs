@@ -383,6 +383,9 @@ impl BamPileup {
                     .context("Failed to get region end")?
                     .get();
                 let mut bin_counts: Vec<Iv> = Vec::new();
+                // Bin coordinates are 1-based (noodles/SAM convention); region_start comes
+                // from Position::get() which is always ≥ 1. Conversion to 0-based happens
+                // at write time in to_bigwig().
                 let mut start = region_start;
                 while start < region_end {
                     let end = (start + self.bin_size as usize).min(region_end);
@@ -768,14 +771,17 @@ impl BamPileup {
         }
 
         // Create iterator from column slices: (chrom_name, Value).
+        // BigWig format is 0-based half-open [start, end). Internal coordinates are
+        // 1-based (noodles/SAM convention), so subtract 1 from both start and end.
+        // start_slice[i] ≥ 1 always (Position::get() minimum), so no underflow.
         let n_rows = df.height();
         let iter = (0..n_rows).map(|i| {
             let name: &str = chrom_names[idx_slice[i] as usize].as_str();
             (
                 name,
                 Value {
-                    start: start_slice[i],
-                    end: end_slice[i],
+                    start: start_slice[i] - 1,
+                    end: end_slice[i] - 1,
                     value: score_slice[i],
                 },
             )
