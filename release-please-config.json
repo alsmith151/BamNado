@@ -1,0 +1,15 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "packages": {
+    "bamnado": {
+      "release-type": "rust",
+      "package-name": "bamnado",
+      "changelog-path": "../CHANGELOG.md",
+      "include-component-in-tag": false,
+      "extra-files": [
+        "bamnado-python/Cargo.toml",
+        "pyproject.toml"
+      ]
+    }
+  }
+}
