@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0](https://github.com/alsmith151/BamNado/compare/v0.6.1...v0.7.0) (2026-05-20)
+
+
+### Features
+
+* add scale factors to BigWig comparison and aggregation options ([#81](https://github.com/alsmith151/BamNado/issues/81)) ([fa53985](https://github.com/alsmith151/BamNado/commit/fa53985f19fa42efe10fc8dd43689f43caf67dce))
+
 ## [Unreleased]
 
 ### Added
