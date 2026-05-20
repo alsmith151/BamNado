@@ -129,3 +129,4 @@ maturin build --release  # wheel
 #### Repo notes:
 
 - Main branch has protection, needs a PR to merge.
+- `cargo build` (workspace) fails at link stage with pyo3 undefined symbol errors (`_PyBaseObject_Type`, etc.) — Python headers not linked in the dev environment. Use `cargo build -p bamnado` or `cargo test -p bamnado` to build/test the Rust library and CLI without the Python bindings. The pyo3 cdylib in `bamnado-python/` requires `maturin` to build correctly.

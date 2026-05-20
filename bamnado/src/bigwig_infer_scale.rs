@@ -1,10 +1,44 @@
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
+use rayon::prelude::*;
+use serde::Serialize;
 use std::collections::HashSet;
-use std::io::{Read, Seek};
+use std::fs::File;
+use std::io::{BufReader, Read, Seek};
 use std::path::Path;
 
+/// Read buffer per thread — large enough to amortise syscall overhead on whole-chromosome fetches.
+const BW_BUF_BYTES: usize = 2 << 20; // 2 MB
+
+fn open_bw(path: &Path) -> Result<bigtools::BigWigRead<BufReader<File>>> {
+    let file = File::open(path).with_context(|| format!("Cannot open {}", path.display()))?;
+    let buf = BufReader::with_capacity(BW_BUF_BYTES, file);
+    bigtools::BigWigRead::open(buf).map_err(|e| anyhow::anyhow!("BigWig open error: {e}"))
+}
+
+fn ser_f64_max_null<S>(v: &f64, s: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    if *v == f64::MAX {
+        s.serialize_none()
+    } else {
+        s.serialize_some(v)
+    }
+}
+
+fn ser_f64_nan_null<S>(v: &f64, s: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    if v.is_nan() {
+        s.serialize_none()
+    } else {
+        s.serialize_some(v)
+    }
+}
+
 /// Inferred normalisation method.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub enum NormMethod {
     Cpm,
     Rpkm,
@@ -25,7 +59,7 @@ impl std::fmt::Display for NormMethod {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 pub struct Warnings {
     /// More than 2 distinct interval widths — variable bin sizes found.
     pub variable_bin_sizes: bool,
@@ -37,7 +71,7 @@ pub struct Warnings {
     pub min_from_small_chrom: bool,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 pub struct InferScaleResult {
     /// Inferred normalisation method.
     pub norm_method: NormMethod,
@@ -49,9 +83,11 @@ pub struct InferScaleResult {
     pub bin_size: u32,
     /// Global minimum non-zero bin value.
     pub min_val: f64,
-    /// Second-smallest distinct non-zero bin value.
+    /// Second-smallest distinct non-zero bin value (null when only one distinct value seen).
+    #[serde(serialize_with = "ser_f64_max_null")]
     pub second_min_val: f64,
-    /// second_min / min (diagnostic ratio).
+    /// second_min / min (diagnostic ratio; null when second_min unknown).
+    #[serde(serialize_with = "ser_f64_nan_null")]
     pub ratio: f64,
     /// Estimated pseudocount (if detected).
     pub pseudocount: Option<f64>,
@@ -62,10 +98,35 @@ pub struct InferScaleResult {
     pub chroms_scanned: usize,
 }
 
+impl InferScaleResult {
+    /// Convert a normalised BigWig value back to raw read count per bin.
+    ///
+    /// raw = value × scale_factor
+    ///
+    /// Derivation:
+    ///   CPM:  value = reads / (N/1e6)       →  raw = value × (N/1e6)
+    ///   RPKM: value = reads / (N×bin/1e9)   →  raw = value × (N×bin/1e9)
+    ///   Both reduce to: raw = value × scale_factor
+    ///
+    /// When a pseudocount was detected the scale_factor already uses second_min
+    /// (the smallest bin with ≥1 real read) so raw counts remain integer-valued.
+    pub fn to_raw(&self, value: f64) -> f64 {
+        value * self.scale_factor
+    }
+}
+
 /// Infer scale factor and normalisation method from a BigWig file.
+///
+/// Chromosomes are scanned in three priority groups (mid-sized autosomes first,
+/// large chromosomes second, small/unplaced last).  Each group is processed in
+/// parallel — every worker thread opens its own buffered reader.  Scanning stops
+/// as soon as the minimum value has been confirmed on ≥2 chromosomes and the
+/// second_min/min ratio is near an integer.
 pub fn infer_scale_factor(bw_path: &Path) -> Result<InferScaleResult> {
-    let mut reader = bigtools::BigWigRead::open_file(bw_path)?;
-    let chrom_info: Vec<bigtools::ChromInfo> = reader.chroms().to_owned();
+    let chrom_info: Vec<bigtools::ChromInfo> = {
+        let reader = open_bw(bw_path)?;
+        reader.chroms().to_owned()
+    };
 
     if chrom_info.is_empty() {
         bail!("BigWig file has no chromosomes");
@@ -73,9 +134,13 @@ pub fn infer_scale_factor(bw_path: &Path) -> Result<InferScaleResult> {
 
     let genome_size: u64 = chrom_info.iter().map(|c| c.length as u64).sum();
 
-    // Sort: mid-sized autosomes first, large deferred, small/unplaced last.
-    let mut sorted_chroms = chrom_info.clone();
-    sorted_chroms.sort_by_key(|c| chrom_priority(&c.name, c.length, genome_size));
+    // Partition into three priority groups — mid-sized autosomes first because
+    // they are the most likely to share the global minimum and confirm confidence
+    // quickly, while being small enough to scan fast.
+    let mut groups: [Vec<bigtools::ChromInfo>; 3] = [vec![], vec![], vec![]];
+    for c in &chrom_info {
+        groups[chrom_priority(&c.name, c.length, genome_size) as usize].push(c.clone());
+    }
 
     let mut global_min = f64::MAX;
     let mut global_second_min = f64::MAX;
@@ -85,49 +150,68 @@ pub fn infer_scale_factor(bw_path: &Path) -> Result<InferScaleResult> {
     let mut confident = false;
     let mut min_chrom_name = String::new();
 
-    for chrom in &sorted_chroms {
-        let (cmin, c2min, cwidths) = scan_chrom(&mut reader, &chrom.name, chrom.length)?;
-        chroms_scanned += 1;
-        global_starts.extend(cwidths);
-
-        if cmin == f64::MAX {
+    'outer: for group in &groups {
+        if group.is_empty() || confident {
             continue;
         }
 
-        const EPS: f64 = 1e-9;
+        // All chromosomes in this priority group are scanned in parallel.
+        // Each closure opens its own BigWigRead so there is no shared I/O state.
+        type ChromScan = Result<(String, f64, f64, HashSet<u32>)>;
+        let scan_results: Vec<ChromScan> = group
+            .par_iter()
+            .map(|chrom| {
+                let mut r = open_bw(bw_path)?;
+                let (cmin, c2min, cwidths) = scan_chrom(&mut r, &chrom.name, chrom.length)?;
+                Ok((chrom.name.clone(), cmin, c2min, cwidths))
+            })
+            .collect();
 
-        if cmin < global_min - EPS {
-            let old_min = global_min;
-            let old_second = global_second_min;
-            // Candidates for new second_min: old global_min, old second_min, this chrom's second_min.
-            global_second_min = [old_min, old_second, c2min]
-                .iter()
-                .copied()
-                .filter(|&v| v > cmin + EPS)
-                .fold(f64::MAX, f64::min);
-            global_min = cmin;
-            min_chrom_name = chrom.name.clone();
-            min_confirmations = 1;
-        } else if (cmin - global_min).abs() < EPS {
-            min_confirmations += 1;
-            if c2min < global_second_min - EPS {
-                global_second_min = c2min;
-            }
-        } else {
-            // cmin > global_min: update second_min only.
-            if cmin < global_second_min - EPS {
-                global_second_min = cmin;
-            }
-            if c2min > global_min + EPS && c2min < global_second_min - EPS {
-                global_second_min = c2min;
-            }
-        }
+        // Merge results sequentially — order within a group doesn't matter for
+        // correctness; the priority ordering ensures the most informative group
+        // is processed first so confidence is reached with fewest total scans.
+        for res in scan_results {
+            let (chrom_name, cmin, c2min, cwidths) = res?;
+            chroms_scanned += 1;
+            global_starts.extend(cwidths);
 
-        if min_confirmations >= 2 && global_second_min < f64::MAX {
-            let ratio = global_second_min / global_min;
-            if (ratio - ratio.round()).abs() < 0.01 {
-                confident = true;
-                break;
+            if cmin == f64::MAX {
+                continue;
+            }
+
+            const EPS: f64 = 1e-9;
+
+            if cmin < global_min - EPS {
+                let old_min = global_min;
+                let old_second = global_second_min;
+                global_second_min = [old_min, old_second, c2min]
+                    .iter()
+                    .copied()
+                    .filter(|&v| v > cmin + EPS)
+                    .fold(f64::MAX, f64::min);
+                global_min = cmin;
+                min_chrom_name = chrom_name;
+                min_confirmations = 1;
+            } else if (cmin - global_min).abs() < EPS {
+                min_confirmations += 1;
+                if c2min < global_second_min - EPS {
+                    global_second_min = c2min;
+                }
+            } else {
+                if cmin < global_second_min - EPS {
+                    global_second_min = cmin;
+                }
+                if c2min > global_min + EPS && c2min < global_second_min - EPS {
+                    global_second_min = c2min;
+                }
+            }
+
+            if min_confirmations >= 2 && global_second_min < f64::MAX {
+                let ratio = global_second_min / global_min;
+                if (ratio - ratio.round()).abs() < 0.01 {
+                    confident = true;
+                    break 'outer;
+                }
             }
         }
     }
@@ -181,7 +265,7 @@ pub fn infer_scale_factor(bw_path: &Path) -> Result<InferScaleResult> {
         _ => n_cpm,
     };
 
-    let min_chrom_fraction = sorted_chroms
+    let min_chrom_fraction = chrom_info
         .iter()
         .find(|c| c.name == min_chrom_name)
         .map(|c| c.length as f64 / genome_size as f64)
@@ -601,5 +685,29 @@ mod tests {
         chroms.insert("chr5".to_string(), 1000u32);
         let result = make_bigwig(&path, chroms, vec![]);
         assert!(result.is_err(), "bigtools rejects empty interval list");
+    }
+
+    #[test]
+    fn test_to_raw_cpm() -> anyhow::Result<()> {
+        // N=100M, CPM: 1 read → 0.01. to_raw(0.01) should give 1.0.
+        let dir = tempfile::tempdir()?;
+        let path = make_two_chrom_bigwig(&dir, 0.01, 0.02, 10)?;
+        let r = infer_scale_factor(&path)?;
+        assert!((r.to_raw(0.01) - 1.0).abs() < 1e-6);
+        Ok(())
+    }
+
+    #[test]
+    fn test_json_serialization() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let path = make_two_chrom_bigwig(&dir, 0.01, 0.02, 10)?;
+        let r = infer_scale_factor(&path)?;
+        let json = serde_json::to_string(&r)?;
+        // Sanity: parses back and key fields are present
+        let v: serde_json::Value = serde_json::from_str(&json)?;
+        assert_eq!(v["norm_method"], "Cpm");
+        assert!(v["scale_factor"].is_number());
+        assert!(v["second_min_val"].is_number());
+        Ok(())
     }
 }

@@ -405,6 +405,7 @@ enum Commands {
 enum InferScaleFormat {
     Table,
     Tsv,
+    Json,
 }
 
 // Helper functions to reduce code duplication
@@ -1033,6 +1034,7 @@ fn main() -> Result<()> {
                     let rows: Vec<(&str, String)> = vec![
                         ("normalisation", result.norm_method.to_string()),
                         ("scale_factor", format!("{:.6e}", result.scale_factor)),
+                        ("to_raw", format!("value × {:.6e}", result.scale_factor)),
                         ("library_size", format!("{:.0}", result.library_size)),
                         ("bin_size", format!("{} bp", result.bin_size)),
                         ("min_val", format!("{:.6e}", result.min_val)),
@@ -1099,6 +1101,7 @@ fn main() -> Result<()> {
                     println!("field\tvalue");
                     println!("normalisation\t{}", result.norm_method);
                     println!("scale_factor\t{:.6e}", result.scale_factor);
+                    println!("to_raw\tvalue × {:.6e}", result.scale_factor);
                     println!("library_size\t{:.0}", result.library_size);
                     println!("bin_size\t{}", result.bin_size);
                     println!("min_val\t{:.6e}", result.min_val);
@@ -1127,6 +1130,9 @@ fn main() -> Result<()> {
                     );
                     println!("confident\t{}", if result.confident { "yes" } else { "no" });
                     println!("chroms_scanned\t{}", result.chroms_scanned);
+                }
+                InferScaleFormat::Json => {
+                    println!("{}", serde_json::to_string_pretty(&result)?);
                 }
             }
         }
