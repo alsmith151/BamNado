@@ -79,7 +79,7 @@ pub fn infer_scale_factor(bw_path: &Path) -> Result<InferScaleResult> {
 
     let mut global_min = f64::MAX;
     let mut global_second_min = f64::MAX;
-    let mut global_bin_widths: HashSet<u32> = HashSet::new();
+    let mut global_starts: HashSet<u32> = HashSet::new();
     let mut min_confirmations: u32 = 0;
     let mut chroms_scanned: usize = 0;
     let mut confident = false;
@@ -88,7 +88,7 @@ pub fn infer_scale_factor(bw_path: &Path) -> Result<InferScaleResult> {
     for chrom in &sorted_chroms {
         let (cmin, c2min, cwidths) = scan_chrom(&mut reader, &chrom.name, chrom.length)?;
         chroms_scanned += 1;
-        global_bin_widths.extend(cwidths);
+        global_starts.extend(cwidths);
 
         if cmin == f64::MAX {
             continue;
@@ -136,8 +136,10 @@ pub fn infer_scale_factor(bw_path: &Path) -> Result<InferScaleResult> {
         bail!("No non-zero values found in BigWig file");
     }
 
-    let canonical_bin_size = global_bin_widths.iter().copied().max().unwrap_or(0);
-    let variable_bin_sizes = global_bin_widths.len() > 2;
+    // GCD of all observed widths (end-truncated bins are excluded in scan_chrom).
+    // GCD = 0 → no widths collected; GCD = 1 → no common factor → truly mixed bin sizes.
+    let canonical_bin_size = global_starts.iter().copied().fold(0u32, gcd);
+    let variable_bin_sizes = canonical_bin_size <= 1;
 
     let ratio = if global_second_min < f64::MAX {
         global_second_min / global_min
@@ -206,6 +208,10 @@ pub fn infer_scale_factor(bw_path: &Path) -> Result<InferScaleResult> {
     })
 }
 
+fn gcd(a: u32, b: u32) -> u32 {
+    if b == 0 { a } else { gcd(b, a % b) }
+}
+
 fn scan_chrom<R: Read + Seek>(
     reader: &mut bigtools::BigWigRead<R>,
     chrom: &str,
@@ -214,7 +220,7 @@ fn scan_chrom<R: Read + Seek>(
     let it = reader.get_interval(chrom, 0, chrom_len)?;
     let mut min1 = f64::MAX;
     let mut min2 = f64::MAX;
-    let mut widths: HashSet<u32> = HashSet::new();
+    let mut starts: HashSet<u32> = HashSet::new();
 
     for r in it {
         let iv = r?;
@@ -222,10 +228,16 @@ fn scan_chrom<R: Read + Seek>(
             continue;
         }
         let v = iv.value as f64;
-        widths.insert(iv.end - iv.start);
+
+        // Track non-zero start positions for bin_size inference.
+        // All intervals in a fixed-bin BigWig start at multiples of bin_size, including
+        // end-truncated ones — so starts are robust to chromosome boundary truncation.
+        // start=0 contributes nothing to GCD (identity), so skip it.
+        if iv.start > 0 {
+            starts.insert(iv.start);
+        }
 
         if v < min1 {
-            // Old min1 becomes candidate for min2.
             if min1 < min2 {
                 min2 = min1;
             }
@@ -235,7 +247,7 @@ fn scan_chrom<R: Read + Seek>(
         }
     }
 
-    Ok((min1, min2, widths))
+    Ok((min1, min2, starts))
 }
 
 /// Returns sort key: 0 = mid-sized autosomes, 1 = large, 2 = small/unplaced/mito.
@@ -475,59 +487,56 @@ mod tests {
 
     #[test]
     fn test_variable_bin_sizes_warning() -> anyhow::Result<()> {
-        // Three distinct interval widths → variable_bin_sizes warning.
+        // Non-zero start positions 10 and 21 → GCD(10,21)=1 → variable_bin_sizes warning.
+        // Simulates a file where two incommensurable bin grids are mixed.
         let dir = tempfile::tempdir()?;
         let path = dir.path().join("varbins.bw");
         let mut chroms = HashMap::new();
-        chroms.insert("chr5".to_string(), 1000u32);
-        chroms.insert("chr7".to_string(), 1000u32);
-        // Widths: 10, 15, 5 → three distinct values.
+        chroms.insert("chr5".to_string(), 50u32);
+        chroms.insert("chr7".to_string(), 50u32);
+        // Non-zero starts visible after skipping start=0: {10, 21} → GCD=1 → variable.
         let intervals = vec![
             ("chr5".to_string(), 0u32, 10u32, 0.01f32),
-            ("chr5".to_string(), 10, 25, 0.02),
-            ("chr5".to_string(), 25, 30, 0.02),
-            ("chr5".to_string(), 30, 40, 0.02),
+            ("chr5".to_string(), 10, 21, 0.02),
+            ("chr5".to_string(), 21, 50, 0.02),
             ("chr7".to_string(), 0, 10, 0.01),
-            ("chr7".to_string(), 10, 25, 0.02),
-            ("chr7".to_string(), 25, 30, 0.02),
-            ("chr7".to_string(), 30, 40, 0.02),
+            ("chr7".to_string(), 10, 21, 0.02),
+            ("chr7".to_string(), 21, 50, 0.02),
         ];
         make_bigwig(&path, chroms, intervals)?;
         let r = infer_scale_factor(&path)?;
 
         assert!(
             r.warnings.variable_bin_sizes,
-            "variable bin sizes should be flagged"
+            "coprime starts should flag variable_bin_sizes"
         );
         Ok(())
     }
 
     #[test]
-    fn test_two_distinct_widths_not_variable() -> anyhow::Result<()> {
-        // Normal file: bin_size=10 + truncated end bin → exactly 2 widths → no warning.
+    fn test_collapsed_bins_not_variable() -> anyhow::Result<()> {
+        // Collapsed BigWig: widths 10, 20, 30 (all ×10), starts {10, 30, 60}.
+        // GCD({10,30,60}) = 10 → canonical_bin_size=10, variable_bin_sizes=false.
         let dir = tempfile::tempdir()?;
-        let path = dir.path().join("normal.bw");
+        let path = dir.path().join("collapsed.bw");
         let mut chroms = HashMap::new();
-        chroms.insert("chr5".to_string(), 105u32); // 10 full bins + 5 bp tail
-        chroms.insert("chr7".to_string(), 105u32);
+        chroms.insert("chr5".to_string(), 200u32);
+        chroms.insert("chr7".to_string(), 200u32);
         let mut intervals = Vec::new();
         for chrom in &["chr5", "chr7"] {
-            for i in 0..10u32 {
-                let start = i * 10;
-                let end = (start + 10).min(105);
-                let v = if i == 0 { 0.01 } else { 0.02 };
-                intervals.push((chrom.to_string(), start, end, v));
-            }
-            // Truncated end bin
-            intervals.push((chrom.to_string(), 100, 105, 0.02));
+            intervals.push((chrom.to_string(), 0u32, 10u32, 0.01f32));
+            intervals.push((chrom.to_string(), 10, 30, 0.02));
+            intervals.push((chrom.to_string(), 30, 60, 0.03));
+            intervals.push((chrom.to_string(), 60, 200, 0.02));
         }
         make_bigwig(&path, chroms, intervals)?;
         let r = infer_scale_factor(&path)?;
 
         assert!(
             !r.warnings.variable_bin_sizes,
-            "two distinct widths is normal — no warning expected"
+            "all-multiple starts should not trigger variable warning"
         );
+        assert_eq!(r.bin_size, 10, "GCD of starts {{10,30,60}} = 10");
         Ok(())
     }
 
