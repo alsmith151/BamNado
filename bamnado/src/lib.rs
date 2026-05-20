@@ -31,6 +31,7 @@ pub mod bam_splitter;
 pub mod bam_utils;
 pub mod bedgraph_utils;
 pub mod bigwig_compare;
+pub mod bigwig_infer_scale;
 pub mod coverage_analysis;
 pub mod genomic_intervals;
 pub mod read_filter;
