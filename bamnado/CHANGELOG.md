@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0](https://github.com/alsmith151/BamNado/compare/v0.7.0...v0.8.0) (2026-05-26)
+
+
+### Features
+
+* add JSON output options to infer-scale subcommand ([8927b58](https://github.com/alsmith151/BamNado/commit/8927b58a8c127f12cb336c435265c112e30ec0c2))
+
 ## [0.7.0](https://github.com/alsmith151/BamNado/compare/v0.6.1...v0.7.0) (2026-05-20)
 
 
