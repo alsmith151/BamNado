@@ -77,7 +77,7 @@ mod _bamnado {
         #[new]
         #[pyo3(signature = (
             min_mapq=0,
-            proper_pair=true,
+            proper_pair=false,
             min_length=0,
             max_length=1000,
             strand="both",
@@ -293,7 +293,7 @@ mod _bamnado {
         for interval in signal {
             let start = interval.start;
             let end = interval.stop;
-            let value = interval.val as f32;
+            let value = interval.val as f32 * scale_factor;
             array.slice_mut(s![start..end]).fill(value);
         }
 

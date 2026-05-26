@@ -530,7 +530,7 @@ impl BamReadFilter {
             }
         }
 
-        let header = header.expect("No header provided");
+        let header = header.ok_or_else(|| anyhow::anyhow!("No header provided"))?;
         let chrom_id = alignment
             .reference_sequence_id(header)
             .context("Failed to get reference sequence ID")??;
@@ -576,7 +576,15 @@ impl BamReadFilter {
         if let Some(read_group) = &self.read_group {
             let rg = noodles::sam::alignment::record::data::field::tag::Tag::READ_GROUP;
             let data = alignment.data();
-            let read_group_value = data.get(&rg).context("Failed to get read group")??;
+            let read_group_value = match data.get(&rg) {
+                None => {
+                    self.stats
+                        .n_not_in_read_group
+                        .fetch_add(1, Ordering::Relaxed);
+                    return Ok(false);
+                }
+                Some(v) => v?,
+            };
 
             match read_group_value {
                 Value::String(value) => {

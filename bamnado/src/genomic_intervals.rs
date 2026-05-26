@@ -31,13 +31,14 @@ where
     cigar.iter().try_fold(0, |acc, op| {
         let op = op.context("Failed to parse CIGAR operation")?;
         match op.kind() {
+            // Reference-consuming operations
             Kind::Match
-            | Kind::Insertion
+            | Kind::Deletion
+            | Kind::Skip
             | Kind::SequenceMatch
-            | Kind::Pad
             | Kind::SequenceMismatch => Ok(acc + op.len()),
-            Kind::Deletion | Kind::Skip => Ok(acc),
-            _ => Ok(acc), // Ignore other kinds like SoftClip, HardClip, etc.
+            // Query-only or padding — do not consume reference
+            _ => Ok(acc),
         }
     })
 }
@@ -45,7 +46,7 @@ where
 /// Represents coordinate shifts to be applied to reads.
 ///
 /// The shifts can be applied to the 5' and 3' ends of forward and reverse reads.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Shift {
     /// Shift for the 5' end of forward reads.
     pub five_prime: i32,
@@ -55,32 +56,17 @@ pub struct Shift {
     pub five_prime_reverse: i32,
     /// Shift for the 3' end of reverse reads.
     pub three_prime_reverse: i32,
-    index: usize,
 }
 
-impl Iterator for Shift {
-    type Item = i32;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        match self.index {
-            0 => {
-                self.index += 1;
-                Some(self.five_prime)
-            }
-            1 => {
-                self.index += 1;
-                Some(self.three_prime)
-            }
-            2 => {
-                self.index += 1;
-                Some(self.five_prime_reverse)
-            }
-            3 => {
-                self.index += 1;
-                Some(self.three_prime_reverse)
-            }
-            _ => None,
-        }
+impl Shift {
+    /// Returns all four shift values as an array.
+    pub fn values(self) -> [i32; 4] {
+        [
+            self.five_prime,
+            self.three_prime,
+            self.five_prime_reverse,
+            self.three_prime_reverse,
+        ]
     }
 }
 
@@ -103,7 +89,6 @@ impl FromStr for Shift {
             three_prime,
             five_prime_reverse,
             three_prime_reverse,
-            index: 0,
         })
     }
 }
@@ -115,10 +100,10 @@ impl From<[i32; 4]> for Shift {
             three_prime: shift[1],
             five_prime_reverse: shift[2],
             three_prime_reverse: shift[3],
-            index: 0,
         }
     }
 }
+
 impl From<[usize; 4]> for Shift {
     fn from(shift: [usize; 4]) -> Self {
         Self {
@@ -126,23 +111,25 @@ impl From<[usize; 4]> for Shift {
             three_prime: shift[1] as i32,
             five_prime_reverse: shift[2] as i32,
             three_prime_reverse: shift[3] as i32,
-            index: 0,
         }
     }
 }
 
-impl From<Vec<i32>> for Shift {
-    fn from(shift: Vec<i32>) -> Self {
-        if shift.len() != 4 {
-            panic!("Shift vector must have exactly 4 elements");
-        }
-        Self {
+impl TryFrom<Vec<i32>> for Shift {
+    type Error = anyhow::Error;
+
+    fn try_from(shift: Vec<i32>) -> Result<Self> {
+        anyhow::ensure!(
+            shift.len() == 4,
+            "Shift vector must have exactly 4 elements, got {}",
+            shift.len()
+        );
+        Ok(Self {
             five_prime: shift[0],
             three_prime: shift[1],
             five_prime_reverse: shift[2],
             three_prime_reverse: shift[3],
-            index: 0,
-        }
+        })
     }
 }
 
@@ -375,7 +362,7 @@ impl<'a> IntervalMaker<'a> {
                     self.coords_read()?
                 };
 
-                let (start, end, dtlen) = if self.shift.into_iter().any(|x| x != 0) {
+                let (start, end, dtlen) = if self.shift.values().iter().any(|&x| x != 0) {
                     self.coords_shifted(start, end, dtlen).ok()?
                 } else {
                     (start, end, dtlen as i32)

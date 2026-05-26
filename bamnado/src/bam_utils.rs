@@ -134,13 +134,18 @@ impl CellBarcodes {
             .finish()?;
         let mut barcodes = HashSet::default();
 
-        for barcode in df.column("barcode").unwrap().str().unwrap() {
-            let barcode = barcode.unwrap().to_string();
+        let col = df
+            .column("barcode")
+            .context("Missing 'barcode' column in barcode CSV")?;
+        for barcode in col.str().context("'barcode' column is not string type")? {
+            let barcode = barcode
+                .ok_or_else(|| anyhow::anyhow!("Null value in 'barcode' column"))?
+                .to_string();
             barcodes.insert(barcode);
         }
 
-        println!("Number of barcodes: {}", barcodes.len());
-        println!(
+        log::info!("Loaded {} barcodes", barcodes.len());
+        log::debug!(
             "First 10 barcodes: {:?}",
             barcodes.iter().take(10).collect::<Vec<_>>()
         );
@@ -215,57 +220,6 @@ struct ChromosomeStats {
     unmapped: u64,
 }
 
-/// Reads the header of a BAM file.
-///
-/// If the `noodles` crate fails to read the header, it falls back to `samtools`.
-/// This is useful for handling BAM files with slightly non-standard headers (e.g., from CellRanger).
-pub fn bam_header(file_path: PathBuf) -> Result<sam::Header> {
-    // Read the header of a BAM file
-    // If the noodles crate fails to read the header, we fall back to samtools
-    // This is a bit of a hack but it works for now
-    // The noodles crate is more strict about the header format than samtools
-
-    // Check that the file exists
-    if !file_path.exists() {
-        return Err(anyhow::Error::from(std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            format!("File not found: {}", file_path.display()),
-        )));
-    };
-
-    let mut reader = bam::io::indexed_reader::Builder::default()
-        .build_from_path(file_path.clone())
-        .expect("Failed to open file");
-
-    let header = match reader.read_header() {
-        std::result::Result::Ok(header) => header,
-        Err(e) => {
-            debug!("Failed to read header using noodels falling back to samtools: {e}");
-
-            let header_samtools = std::process::Command::new("samtools")
-                .arg("view")
-                .arg("-H")
-                .arg(file_path.clone())
-                .output()
-                .expect("Failed to run samtools")
-                .stdout;
-
-            let header_str =
-                String::from_utf8(header_samtools).expect("Failed to convert header to string");
-
-            // Slight hack here for CellRanger BAM files that are missing the version info
-            let header_string =
-                header_str.replace("@HD\tSO:coordinate\n", "@HD\tVN:1.6\tSO:coordinate\n");
-            let header_str = header_string.as_bytes();
-            let mut reader = sam::io::Reader::new(header_str);
-            reader
-                .read_header()
-                .expect("Failed to read header with samtools")
-        }
-    };
-    Ok(header)
-}
-
 /// Stores statistics and metadata about a BAM file.
 pub struct BamStats {
     // BAM file stats
@@ -298,7 +252,7 @@ impl BamStats {
     /// This reads the header and index to calculate statistics.
     pub fn new(file_path: PathBuf) -> Result<Self> {
         // Read the header of the BAM file
-        let header = bam_header(file_path.clone())?;
+        let header = get_bam_header(file_path.clone())?;
 
         // Get the contigs from the header
         let contigs = header
@@ -377,6 +331,9 @@ impl BamStats {
 
         let stats = &self.chrom_stats;
         let genome_length = stats.values().map(|x| x.length).sum::<u64>();
+        if genome_length == 0 || self.n_mapped == 0 {
+            return Ok(bin_size);
+        }
         let max_reads_per_bp = self.n_mapped as f64 / genome_length as f64;
         let genome_chunk_length = 5e6_f64.min(2e6 / (max_reads_per_bp));
 
@@ -588,8 +545,8 @@ pub fn regions_to_lapper(regions: Vec<Region>) -> Result<HashMap<String, Lapper<
         };
 
         let end = match end {
-            Bound::Included(end) => end,
-            Bound::Excluded(end) => end - 1,
+            Bound::Included(end) => end + 1, // Lapper is half-open [start, stop)
+            Bound::Excluded(end) => end,
             _ => 0,
         };
 
@@ -685,23 +642,23 @@ where
 
     let mut reader = bam::io::indexed_reader::Builder::default()
         .build_from_path(file_path)
-        .expect("Failed to open file");
+        .context("Failed to open BAM file")?;
 
     let header = match reader.read_header() {
         std::result::Result::Ok(header) => header,
         Err(e) => {
-            debug!("Failed to read header using noodels falling back to samtools: {e}");
+            debug!("Failed to read header using noodles, falling back to samtools: {e}");
 
             let header_samtools = std::process::Command::new("samtools")
                 .arg("view")
                 .arg("-H")
                 .arg(file_path)
                 .output()
-                .expect("Failed to run samtools")
+                .context("Failed to run samtools")?
                 .stdout;
 
-            let header_str =
-                String::from_utf8(header_samtools).expect("Failed to convert header to string");
+            let header_str = String::from_utf8(header_samtools)
+                .context("Failed to convert samtools header to UTF-8")?;
 
             // Slight hack here for CellRanger BAM files that are missing the version info
             let header_string =
@@ -710,7 +667,7 @@ where
             let mut reader = sam::io::Reader::new(header_str);
             reader
                 .read_header()
-                .expect("Failed to read header with samtools")
+                .context("Failed to parse samtools header")?
         }
     };
     Ok(header)

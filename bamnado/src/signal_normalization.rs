@@ -32,10 +32,9 @@ impl NormalizationMethod {
             "raw" => Ok(NormalizationMethod::Raw),
             "rpkm" => Ok(NormalizationMethod::RPKM),
             "cpm" => Ok(NormalizationMethod::CPM),
-            _ => {
-                warn!("Unknown normalization method: {s}. Defaulting to Raw");
-                Ok(NormalizationMethod::Raw)
-            }
+            _ => Err(anyhow::anyhow!(
+                "Unknown normalization method: '{s}'. Valid options: raw, cpm, rpkm"
+            )),
         }
     }
 
@@ -55,14 +54,20 @@ impl NormalizationMethod {
             Self::Raw => base,
 
             Self::CPM => {
-                // Counts Per Million: normalize by library size
+                if n_reads == 0 {
+                    warn!("n_reads is 0; CPM normalization undefined, returning 0.0");
+                    return 0.0;
+                }
                 base * (1_000_000.0 / n_reads as f64)
             }
 
             Self::RPKM => {
-                // Reads Per Kilobase per Million: normalize by both length and library size
+                if n_reads == 0 {
+                    warn!("n_reads is 0; RPKM normalization undefined, returning 0.0");
+                    return 0.0;
+                }
                 let reads_per_million = 1_000_000.0 / n_reads as f64;
-                let per_kilobase = 1_000.0 / bin_size as f64; // Convert bp to kb
+                let per_kilobase = 1_000.0 / bin_size as f64;
                 base * reads_per_million * per_kilobase
             }
         }

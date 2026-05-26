@@ -38,7 +38,7 @@ use rust_lapper::Lapper;
 fn is_scaffold(name: &str) -> bool {
     static SCAFFOLD_REGEX: OnceLock<Regex> = OnceLock::new();
     SCAFFOLD_REGEX
-        .get_or_init(|| Regex::new("(chrUn.*|.*alt|.*random)").unwrap())
+        .get_or_init(|| Regex::new(r"^chrUn|_alt$|_random$").unwrap())
         .is_match(name)
 }
 
@@ -105,28 +105,32 @@ fn collapse_equal_bins(df: DataFrame, score_columns: Option<Vec<PlSmallStr>>) ->
         same_scores.push(same_score);
     }
 
-    // Sum the boolean columns to get a single boolean column
-    let same_chrom_and_score = same_chrom
-        & same_scores
-            .iter()
-            .fold(same_scores[0].clone(), |acc, x| acc & x.clone());
+    // AND all per-score boolean columns together (handles empty score_columns)
+    let combined_scores = same_scores.into_iter().reduce(|a, b| a & b);
+    let same_chrom_and_score = match combined_scores {
+        Some(scores) => same_chrom & scores,
+        None => same_chrom,
+    };
 
-    // Compute a cumulative sum to define groups of identical rows.
-    let group = cum_sum(&same_chrom_and_score.into_series(), false)?
+    // Compute groups: increment whenever the value CHANGES.
+    // Fill nulls (first row has no previous → treat as "different") before negating.
+    let same_no_null = same_chrom_and_score
+        .into_series()
+        .fill_null(FillNullStrategy::Zero)? // null → false
+        .bool()?
+        .clone();
+    let group = cum_sum(&(!same_no_null).into_series(), false)?
         .with_name("groups".into())
         .into_column();
 
+    let mut agg_exprs = vec![col("chrom").first(), col("start").min(), col("end").max()];
+    agg_exprs.extend(score_columns.iter().map(|c| col(c.as_str()).first()));
     let df = df
         .with_column(group)?
         .clone()
         .lazy()
         .group_by(["groups"])
-        .agg(&[
-            col("chrom").first(),
-            col("start").min(),
-            col("end").max(),
-            col("score").sum(),
-        ])
+        .agg(&agg_exprs)
         .collect()?;
 
     let collapsed_rows = df.height();
@@ -422,17 +426,23 @@ impl BamPileup {
                 }
                 Ok(bin_counts)
             })
-            // Combine the results from parallel threads.
-            .fold(Vec::new, |mut acc, result: Result<Vec<Iv>>| {
-                if let Ok(mut intervals) = result {
-                    acc.append(&mut intervals);
-                }
-                acc
-            })
-            .reduce(Vec::new, |mut acc, mut vec| {
-                acc.append(&mut vec);
-                acc
-            });
+            // Combine the results from parallel threads, propagating any errors.
+            .fold(
+                || Ok(Vec::new()),
+                |acc: Result<Vec<Iv>>, result: Result<Vec<Iv>>| {
+                    let mut acc = acc?;
+                    acc.append(&mut result?);
+                    Ok(acc)
+                },
+            )
+            .reduce(
+                || Ok(Vec::new()),
+                |acc: Result<Vec<Iv>>, b: Result<Vec<Iv>>| {
+                    let mut acc = acc?;
+                    acc.append(&mut b?);
+                    Ok(acc)
+                },
+            )?;
 
         let interval_count = pileup.len();
         let total_coverage: u64 = pileup.iter().map(|iv| (iv.stop - iv.start) as u64).sum();
@@ -550,22 +560,26 @@ impl BamPileup {
 
                 Ok((region.name().to_owned().to_string(), bin_counts))
             })
-            // Combine the results from parallel threads.
+            // Combine the results from parallel threads, propagating any errors.
             .fold(
-                HashMap::<String, Vec<Iv>>::default,
-                |mut acc, result: Result<(String, Vec<Iv>)>| {
-                    if let Ok((chrom, intervals)) = result {
-                        acc.entry(chrom).or_default().extend(intervals);
-                    }
-                    acc
+                || Ok(HashMap::<String, Vec<Iv>>::default()),
+                |acc: Result<HashMap<String, Vec<Iv>>>, result: Result<(String, Vec<Iv>)>| {
+                    let mut acc = acc?;
+                    let (chrom, intervals) = result?;
+                    acc.entry(chrom).or_default().extend(intervals);
+                    Ok(acc)
                 },
             )
-            .reduce(HashMap::default, |mut acc, map| {
-                for (key, mut value) in map {
-                    acc.entry(key).or_default().append(&mut value);
-                }
-                acc
-            });
+            .reduce(
+                || Ok(HashMap::default()),
+                |acc: Result<HashMap<String, Vec<Iv>>>, b: Result<HashMap<String, Vec<Iv>>>| {
+                    let mut acc = acc?;
+                    for (key, mut value) in b? {
+                        acc.entry(key).or_default().append(&mut value);
+                    }
+                    Ok(acc)
+                },
+            )?;
 
         let n_chromosomes = pileup.len();
         let total_intervals: usize = pileup.values().map(|ivs| ivs.len()).sum();
@@ -691,10 +705,8 @@ impl BamPileup {
             if self.ignore_scaffold_chromosomes && is_scaffold(&name) {
                 continue;
             }
-            let len_u32 = u32::try_from(len).context(format!(
-                "Chromosome {} length {} exceeds u32::MAX",
-                name, len
-            ))?;
+            let len_u32 = u32::try_from(len)
+                .with_context(|| format!("Chromosome {name} length {len} exceeds u32::MAX"))?;
             chrom_sizes_vec.push((name, len_u32));
         }
         let chrom_sizes: std::collections::HashMap<String, u32> =
@@ -824,6 +836,10 @@ impl MultiBamPileup {
     }
 
     fn _validate_bam_pileups(&self) -> Result<()> {
+        if self.bam_pileups.is_empty() {
+            anyhow::bail!("At least one BAM pileup is required");
+        }
+
         // Check that all BAM pileups have the same bin size.
         let bin_sizes: Vec<u64> = self.bam_pileups.iter().map(|p| p.bin_size).collect();
         if bin_sizes.iter().all(|&x| x == bin_sizes[0]) {
@@ -854,7 +870,7 @@ impl MultiBamPileup {
         let names: Vec<PlSmallStr> = self
             .bam_pileups
             .iter()
-            .map(|p| p.file_path.clone().to_str().unwrap().into())
+            .map(|p| p.file_path.to_string_lossy().as_ref().into())
             .collect::<Vec<_>>();
 
         for pileup in &self.bam_pileups {
@@ -999,10 +1015,11 @@ mod tests {
         // Should collapse adjacent bins with same scores
         assert!(result.height() < 4);
 
-        // Verify the collapsed bins have correct aggregated values
+        // Each group keeps the first (representative) score value, not the sum.
+        // Group [score=10, score=10] → score=10; group [score=20, score=20] → score=20.
         let score_col = result.column("score").unwrap();
         let score = score_col.sum_reduce().expect("Failed to sum scores");
-        assert_eq!(score.as_any_value().try_extract::<u32>().unwrap(), 60);
+        assert_eq!(score.as_any_value().try_extract::<u32>().unwrap(), 30);
     }
 
     #[test]
