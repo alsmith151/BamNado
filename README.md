@@ -36,17 +36,32 @@ Useful in workflows including single-cell and Micro-Capture-C (MCC), and many ot
 
 Download the appropriate binary from the [releases page](https://github.com/alsmith151/BamNado/releases).
 
-After downloading:
+After downloading, move to your user bin directory (no root required):
 
 ```bash
 chmod +x bamnado
-./bamnado --version
+mv bamnado ~/.local/bin/bamnado
 ```
 
-(Optional) install system-wide:
+Ensure `~/.local/bin` is on your `PATH` (add to `~/.bashrc` or `~/.zshrc` if needed):
 
 ```bash
-sudo cp bamnado /usr/local/bin/
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+Alternatively, you can run the binary directly from the download location:
+
+```bash
+./bamnado --help
+```
+
+
+### cargo binstall
+
+If you have [`cargo-binstall`](https://github.com/cargo-bins/cargo-binstall) installed, this downloads the pre-built binary automatically:
+
+```bash
+cargo binstall bamnado
 ```
 
 ### Docker
@@ -66,7 +81,6 @@ If you have Rust installed:
 cargo install bamnado
 ```
 
-
 ### Build from source
 
 ```bash
@@ -85,6 +99,147 @@ Install via conda or your system package manager:
 conda install -c bioconda samtools
 # or
 brew install samtools
+```
+
+## Command-line interface
+
+### Getting help
+
+```bash
+bamnado --help                      # List all commands
+bamnado <command> --help            # Help for a specific command
+```
+
+### Available commands
+
+| Command | Aliases | Description |
+| ------- | ------- | ----------- |
+| `bam-coverage` | `coverage` | BAM → bedGraph / BigWig coverage |
+| `multi-bam-coverage` | `multi-coverage` | Merge coverage from multiple BAM files into one track |
+| `split` | — | Split BAM by tag or barcode |
+| `split-exogenous` | `split-spikein` | Split BAM into endogenous / exogenous reads |
+| `modify` | — | Filter and/or adjust reads in a BAM file |
+| `bigwig-compare` | `compare-bigwigs` | Compare two BigWig files bin by bin |
+| `bigwig-aggregate` | `aggregate-bigwigs` | Aggregate multiple BigWig files into one track |
+| `bigwig-infer-scale` | `infer-scale` | Infer scaling factor and library size from a normalised BigWig |
+| `collapse-bedgraph` | `collapse` | Collapse adjacent equal-score bins in a bedGraph |
+
+### Read filtering
+
+All coverage commands share common read filter flags:
+
+| Flag | Default | Description |
+| ---- | ------- | ----------- |
+| `--strand` | `both` | `forward`, `reverse`, or `both` |
+| `--proper-pairs` | off | Keep only properly-paired reads |
+| `--min-mapq` | 20 | Minimum mapping quality |
+| `--min-length` | 20 | Minimum read length (bp) |
+| `--max-length` | 1000 | Maximum read length (bp) |
+| `--min-fragment-len` | — | Minimum insert size (bp); paired-end only |
+| `--max-fragment-len` | — | Maximum insert size (bp); paired-end only |
+| `--blacklist` | — | BED file of regions to exclude |
+| `--barcode-allowlist` | — | Text file of cell barcodes (one per line) |
+| `--read-group` | — | Keep only this read group |
+| `--tag` / `--tag-value` | — | Keep reads where TAG == VALUE |
+
+### Coverage-specific flags
+
+| Flag | Default | Description |
+| ---- | ------- | ----------- |
+| `--normalize` | `raw` | Signal normalization method: `raw`, `rpkm`, or `cpm` |
+| `--fragment-counts` | off | Count fragments instead of individual read alignments |
+| `--ignore-scaffolds` | off | Skip scaffold or unplaced chromosomes |
+| `--threads` | `6` | Threads used when writing BigWig output |
+
+### Examples
+
+#### Generate basic coverage
+
+```bash
+bamnado bam-coverage \
+  --bam sample.bam \
+  --output coverage.bedgraph \
+  --bin-size 100
+```
+
+#### Generate high-quality, normalized coverage
+
+```bash
+bamnado bam-coverage \
+  --bam sample.bam \
+  --output coverage_hq.bw \
+  --bin-size 100 \
+  --normalize rpkm \
+  --min-mapq 30 \
+  --proper-pairs
+```
+
+#### Extract nucleosome-free regions from ATAC-seq
+
+```bash
+bamnado bam-coverage \
+  --bam atac.bam \
+  --output nfr_forward.bw \
+  --bin-size 10 \
+  --strand forward \
+  --min-fragment-len 100 \
+  --max-fragment-len 200 \
+  --fragment-counts \
+  --min-mapq 20
+```
+
+#### Filter by cell barcode (single-cell)
+
+```bash
+bamnado bam-coverage \
+  --bam possorted_genome_bam.bam \
+  --output cell_coverage.bw \
+  --bin-size 100 \
+  --barcode-allowlist barcodes.txt \
+  --fragment-counts
+```
+
+#### Filter by SAM tag (MCC viewpoint)
+
+```bash
+bamnado bam-coverage \
+  --bam mcc.bam \
+  --output BCL2_viewpoint.bw \
+  --bin-size 50 \
+  --tag VP \
+  --tag-value BCL2 \
+  --fragment-counts \
+  --min-mapq 30
+```
+
+#### Compare two BigWig files
+
+```bash
+bamnado bigwig-compare \
+  --bw1 sample_treated.bw \
+  --bw2 sample_control.bw \
+  --comparison log-ratio \
+  --pseudocount 1e-3 \
+  --threads 6 \
+  -o treated_vs_control.bw
+```
+
+#### Aggregate multiple BigWig files
+
+```bash
+bamnado bigwig-aggregate \
+  --bigwigs sample1.bw sample2.bw sample3.bw \
+  --method mean \
+  --threads 6 \
+  -o mean_coverage.bw
+```
+
+#### Simplify bedGraph file
+
+```bash
+bamnado collapse-bedgraph \
+  --input signal.bedgraph \
+  --output signal.collapsed.bedgraph
 ```
 
 ## Python API
@@ -276,152 +431,12 @@ signal = bamnado.get_signal_for_chromosome(
 
 **Note:** Fragment length filtering (`min_fragment_length`, `max_fragment_length`) requires paired-end BAM files and will raise `ValueError` on single-end data.
 
-## Command-line interface
-
-### Getting help
-
-```bash
-bamnado --help                      # List all commands
-bamnado <command> --help            # Help for a specific command
-```
-
-### Available commands
-
-- **Coverage generation**: `bam-coverage` (`coverage`), `multi-bam-coverage` (`multi-coverage`)
-- **BAM manipulation**: `split`, `split-exogenous`, `modify`
-- **BigWig tools**: `bigwig-compare` (`compare-bigwigs`), `bigwig-aggregate` (`aggregate-bigwigs`)
-- **bedGraph tools**: `collapse-bedgraph` (`collapse`)
-
-### Common naming cleanups
-
-The CLI now exposes shorter, more descriptive option names. Older names still work as compatibility aliases.
-
-### Read filtering
-
-All coverage commands share common read filter flags:
-
-| Flag | Default | Description |
-| ---- | ------- | ----------- |
-| `--strand` | `both` | `forward`, `reverse`, or `both` |
-| `--proper-pairs` | off | Keep only properly-paired reads |
-| `--min-mapq` | 20 | Minimum mapping quality |
-| `--min-length` | 20 | Minimum read length (bp) |
-| `--max-length` | 1000 | Maximum read length (bp) |
-| `--min-fragment-len` | — | Minimum insert size (bp); paired-end only |
-| `--max-fragment-len` | — | Maximum insert size (bp); paired-end only |
-| `--blacklist` | — | BED file of regions to exclude |
-| `--barcode-allowlist` | — | Text file of cell barcodes (one per line) |
-| `--read-group` | — | Keep only this read group |
-| `--tag` / `--tag-value` | — | Keep reads where TAG == VALUE |
-
-### Coverage-specific flags
-
-| Flag | Default | Description |
-| ---- | ------- | ----------- |
-| `--normalize` | `raw` | Signal normalization method: `raw`, `rpkm`, or `cpm` |
-| `--fragment-counts` | off | Count fragments instead of individual read alignments |
-| `--ignore-scaffolds` | off | Skip scaffold or unplaced chromosomes |
-| `--threads` | `6` | Threads used when writing BigWig output |
-
-### Examples
-
-#### Generate basic coverage
-
-```bash
-bamnado bam-coverage \
-  --bam sample.bam \
-  --output coverage.bedgraph \
-  --bin-size 100
-```
-
-#### Generate high-quality, normalized coverage
-
-```bash
-bamnado bam-coverage \
-  --bam sample.bam \
-  --output coverage_hq.bw \
-  --bin-size 100 \
-  --normalize rpkm \
-  --min-mapq 30 \
-  --proper-pairs
-```
-
-#### Extract nucleosome-free regions from ATAC-seq
-
-```bash
-bamnado bam-coverage \
-  --bam atac.bam \
-  --output nfr_forward.bw \
-  --bin-size 10 \
-  --strand forward \
-  --min-fragment-len 100 \
-  --max-fragment-len 200 \
-  --fragment-counts \
-  --min-mapq 20
-```
-
-#### Filter by cell barcode (single-cell)
-
-```bash
-bamnado bam-coverage \
-  --bam possorted_genome_bam.bam \
-  --output cell_coverage.bw \
-  --bin-size 100 \
-  --barcode-allowlist barcodes.txt \
-  --fragment-counts
-```
-
-#### Filter by SAM tag (MCC viewpoint)
-
-```bash
-bamnado bam-coverage \
-  --bam mcc.bam \
-  --output BCL2_viewpoint.bw \
-  --bin-size 50 \
-  --tag VP \
-  --tag-value BCL2 \
-  --fragment-counts \
-  --min-mapq 30
-```
-
-#### Compare two BigWig files
-
-```bash
-bamnado bigwig-compare \
-  --bw1 sample_treated.bw \
-  --bw2 sample_control.bw \
-  --comparison log-ratio \
-  --pseudocount 1e-3 \
-  --threads 6 \
-  -o treated_vs_control.bw
-```
-
-#### Aggregate multiple BigWig files
-
-```bash
-bamnado bigwig-aggregate \
-  --bigwigs sample1.bw sample2.bw sample3.bw \
-  --method mean \
-  --threads 6 \
-  -o mean_coverage.bw
-```
-
-#### Simplify bedGraph file
-
-```bash
-bamnado collapse-bedgraph \
-  --input signal.bedgraph \
-  --output signal.collapsed.bedgraph
-```
-
-
 ## Development
 
 ```bash
 cargo build --release
 cargo test
 ```
-
 
 ## License
 
