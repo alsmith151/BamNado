@@ -388,6 +388,13 @@ enum Commands {
         tn5_shift: bool,
     },
 
+    /// Read-level manipulation operations.
+    #[command(name = "reads")]
+    Reads {
+        #[command(subcommand)]
+        command: ReadsCommands,
+    },
+
     /// Infer scaling factor and library size from a normalised BigWig file.
     #[command(name = "bigwig-infer-scale", visible_alias = "infer-scale")]
     InferScale {
@@ -412,6 +419,32 @@ enum Commands {
         /// Default 512 — GCD stabilises within the first few entries.
         #[arg(long, value_name = "N", default_value = "512")]
         max_starts: usize,
+    },
+}
+
+#[derive(Subcommand)]
+enum ReadsCommands {
+    /// Extract soft-clipped bases as FASTQ for re-alignment to a second genome.
+    #[command(name = "extract-softclip", visible_alias = "softclip")]
+    ExtractSoftclip {
+        /// Input BAM file (must be indexed).
+        #[arg(short, long, value_name = "BAM")]
+        bam: PathBuf,
+
+        /// Output FASTQ file path.
+        #[arg(short, long, value_name = "FASTQ")]
+        output: PathBuf,
+
+        /// Minimum soft-clip length to extract (bp).
+        #[arg(long, default_value = "20", value_name = "BP")]
+        min_clip_len: usize,
+
+        /// Which clip ends to extract.
+        #[arg(long, default_value = "both", value_name = "END")]
+        clip_end: bamnado::bam_read_ops::ClipEnd,
+
+        #[command(flatten)]
+        filter_options: FilterOptions,
     },
 }
 
@@ -1174,6 +1207,31 @@ fn main() -> Result<()> {
                 None => print!("{buf}"),
             }
         }
+
+        Commands::Reads { command } => match command {
+            ReadsCommands::ExtractSoftclip {
+                bam,
+                output,
+                min_clip_len,
+                clip_end,
+                filter_options,
+            } => {
+                validate_bam_file(bam)?;
+                log_active_filters(filter_options);
+                let filter = create_filter_from_options(filter_options, None)?;
+                let extractor = bamnado::bam_read_ops::SoftclipExtractor::new(
+                    bam.clone(),
+                    output.clone(),
+                    *min_clip_len,
+                    *clip_end,
+                    filter,
+                );
+                extractor
+                    .run()
+                    .context("Failed to extract soft-clipped reads")?;
+                info!("Finished extracting soft-clipped reads to {}", output.display());
+            }
+        },
     }
 
     Ok(())

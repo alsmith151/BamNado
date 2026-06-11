@@ -27,6 +27,7 @@
 
 // Internal modules
 pub mod bam_modifier;
+pub mod bam_read_ops;
 pub mod bam_splitter;
 pub mod bam_utils;
 pub mod bedgraph_utils;
