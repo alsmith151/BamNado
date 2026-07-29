@@ -19,6 +19,7 @@ use log::info;
 use noodles::{bam, sam};
 
 use crate::bam_utils::add_bamnado_program_group;
+use crate::read_filter::BamReadFilter;
 
 /// Statistics for the read splitting process.
 ///
@@ -31,6 +32,7 @@ pub struct SplitStats {
     n_qcfail_reads: u64,
     n_duplicate_reads: u64,
     n_secondary_reads: u64,
+    n_filtered_reads: u64,
     n_low_maq: u64,
     n_both_genomes: u64,
     n_exogenous: u64,
@@ -47,6 +49,7 @@ impl SplitStats {
             n_qcfail_reads: 0,
             n_duplicate_reads: 0,
             n_secondary_reads: 0,
+            n_filtered_reads: 0,
             n_low_maq: 0,
             n_both_genomes: 0,
             n_exogenous: 0,
@@ -88,6 +91,7 @@ impl Display for SplitStats {
         writeln!(f, "QC fail reads: {}", self.n_qcfail_reads)?;
         writeln!(f, "Duplicate reads: {}", self.n_duplicate_reads)?;
         writeln!(f, "Secondary reads: {}", self.n_secondary_reads)?;
+        writeln!(f, "Filter-mismatched reads: {}", self.n_filtered_reads)?;
         writeln!(f, "Low mapping quality reads: {}", self.n_low_maq)?;
 
         Ok(())
@@ -99,13 +103,14 @@ impl Serialize for SplitStats {
     where
         S: serde::ser::Serializer,
     {
-        let mut state = serializer.serialize_struct("SplitStats", 11)?;
+        let mut state = serializer.serialize_struct("SplitStats", 13)?;
         state.serialize_field("filename", &self.filename)?;
         state.serialize_field("n_total_reads", &self.n_total_reads)?;
         state.serialize_field("n_unmapped_reads", &self.n_unmapped_reads)?;
         state.serialize_field("n_qcfail_reads", &self.n_qcfail_reads)?;
         state.serialize_field("n_duplicate_reads", &self.n_duplicate_reads)?;
         state.serialize_field("n_secondary_reads", &self.n_secondary_reads)?;
+        state.serialize_field("n_filtered_reads", &self.n_filtered_reads)?;
         state.serialize_field("n_low_maq", &self.n_low_maq)?;
         state.serialize_field("n_both_genomes", &self.n_both_genomes)?;
         state.serialize_field("n_exogenous", &self.n_exogenous)?;
@@ -123,8 +128,8 @@ impl Serialize for SplitStats {
 pub struct BamSplitter {
     // The input BAM file
     input_bam: bam::io::Reader<noodles::bgzf::io::Reader<std::fs::File>>,
-    #[allow(dead_code)]
     input_header: sam::Header,
+    filter: BamReadFilter,
 
     // The output BAM files
     endogenous_bam: PathBuf,
@@ -158,6 +163,7 @@ impl BamSplitter {
         input_path: PathBuf,
         output_prefix: PathBuf,
         exogenous_prefix: String,
+        filter: BamReadFilter,
     ) -> Result<Self> {
         let mut input_bam: bam::io::Reader<noodles::bgzf::io::Reader<std::fs::File>> =
             bam::io::reader::Builder.build_from_path(input_path.clone())?;
@@ -206,6 +212,7 @@ impl BamSplitter {
         Ok(Self {
             input_bam,
             input_header: header_input,
+            filter,
             endogenous_bam: endogenous_path,
             exogenous_bam: exogenous_path,
             both_bam: both_path,
@@ -334,6 +341,10 @@ impl BamSplitter {
                     .send(record.clone())
                     .expect("Failed to send record");
             } else {
+                if !self.filter.is_valid(&record, Some(&self.input_header))? {
+                    self.stats.n_filtered_reads += 1;
+                    continue;
+                }
                 let ref_seq_id = match record.reference_sequence_id() {
                     Some(Ok(id)) => id,
                     _ => {

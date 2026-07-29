@@ -1,7 +1,11 @@
 import pytest
 import os
 import numpy as np
+import shutil
+import subprocess
+from pathlib import Path
 from bamnado import get_signal_for_chromosome, compute_scale_factors
+from bamnado.cli import main
 
 @pytest.fixture
 def bam_file():
@@ -94,3 +98,38 @@ def test_compute_scale_factors_nonexistent_bam():
     """Test that a nonexistent BAM file raises RuntimeError."""
     with pytest.raises(RuntimeError):
         compute_scale_factors(["does_not_exist.bam"], method="cpm")
+
+
+def test_cli_help_and_parse_errors_do_not_exit_interpreter():
+    assert main(["--help"]) == 0
+    assert main(["nonesuch"]) == 2
+
+
+def test_cli_can_run_twice_and_restore_sigint_handler():
+    import signal
+
+    previous = signal.getsignal(signal.SIGINT)
+    assert main(["--version"]) == 0
+    assert main(["--version"]) == 0
+    assert signal.getsignal(signal.SIGINT) is previous
+
+
+@pytest.mark.parametrize("args", [["--version"], ["bam-coverage", "--help"], ["nonesuch"]])
+def test_installed_python_cli_matches_rust_binary(args):
+    """The installed console script must be an exact second CLI front door."""
+    repo_root = Path(__file__).resolve().parents[1]
+    binary = repo_root / "target" / "debug" / "bamnado"
+    python_cli = shutil.which("bamnado")
+    if not binary.exists() or python_cli is None:
+        pytest.skip("requires the Rust binary and installed bamnado console script")
+
+    rust_result = subprocess.run(
+        [str(binary), *args], capture_output=True, text=True, check=False
+    )
+    python_result = subprocess.run(
+        [python_cli, *args], capture_output=True, text=True, check=False
+    )
+
+    assert python_result.returncode == rust_result.returncode
+    assert python_result.stdout == rust_result.stdout
+    assert python_result.stderr == rust_result.stderr

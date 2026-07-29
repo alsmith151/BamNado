@@ -561,4 +561,10 @@ mod _bamnado {
     fn __version__() -> &'static str {
         env!("CARGO_PKG_VERSION")
     }
+
+    /// Run the bamnado CLI with `argv` and return its exit code.
+    #[pyfunction]
+    fn _cli_main(py: Python<'_>, argv: Vec<String>) -> i32 {
+        py.detach(|| bamnado::cli::run_cli(argv))
+    }
 }

@@ -1,8 +1,7 @@
 //! # BamNado Library
 //!
 //! `bamnado` is a high-performance Rust library for manipulating BAM files, designed specifically
-//! for specialized genomics workflows such as single-cell ATAC-seq (scATAC-seq) and Multi-modal
-//! Cellular Characterization (MCC).
+//! for specialized genomics workflows such as single-cell ATAC-seq (scATAC-seq) and Micro Capture-C (MCC).
 //!
 //! ## Core Features
 //!
@@ -35,6 +34,7 @@ pub mod bedgraph_utils;
 pub mod bigwig_compare;
 pub mod bigwig_infer_scale;
 pub mod bin_counts;
+pub mod cli;
 pub mod coverage_analysis;
 pub mod genomic_intervals;
 pub mod normalization_factors;
