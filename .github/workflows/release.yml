@@ -226,24 +226,7 @@ jobs:
           cache-all-crates: "true"
 
       - name: Verify version consistency
-        run: |
-          VERSION="${{ needs.meta.outputs.version }}"
-
-          BAMNADO_VERSION=$(grep "^version" bamnado/Cargo.toml | head -1 | cut -d'"' -f2)
-          BAMNADO_PY_VERSION=$(grep "^version" bamnado-python/Cargo.toml | head -1 | cut -d'"' -f2)
-          PYPROJECT_VERSION=$(grep "^version" pyproject.toml | head -1 | cut -d'"' -f2)
-
-          echo "Git tag version: v$VERSION"
-          echo "bamnado/Cargo.toml: $BAMNADO_VERSION"
-          echo "bamnado-python/Cargo.toml: $BAMNADO_PY_VERSION"
-          echo "pyproject.toml: $PYPROJECT_VERSION"
-
-          if [ "$BAMNADO_VERSION" != "$VERSION" ] || [ "$BAMNADO_PY_VERSION" != "$VERSION" ] || [ "$PYPROJECT_VERSION" != "$VERSION" ]; then
-            echo "❌ Version mismatch! All versions must match the git tag."
-            exit 1
-          fi
-
-          echo "✅ All versions are consistent: v$VERSION"
+        run: bash scripts/check-versions.sh "${{ needs.meta.outputs.version }}"
 
       - name: Publish bamnado to crates.io
         run: cargo publish -p bamnado

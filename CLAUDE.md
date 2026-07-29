@@ -9,7 +9,8 @@ BamNado/
 ├── bamnado/          # Core Rust library + CLI binary
 │   └── src/
 │       ├── lib.rs                  # Library entry point / public API
-│       ├── main.rs                 # CLI (clap-based)
+│       ├── cli.rs                  # Clap CLI definition and run_cli() entrypoint
+│       ├── main.rs                 # Thin binary shim
 │       ├── coverage_analysis.rs    # BamPileup — parallel pileup/coverage engine
 │       ├── read_filter.rs          # BamReadFilter — per-read filtering logic
 │       ├── genomic_intervals.rs    # IntervalMaker — BAM record → genomic interval
@@ -18,7 +19,7 @@ BamNado/
 │       ├── normalization_factors.rs # TMM / csaw-background / CPM / median-of-ratios / spike-in scale factors
 │       └── signal_normalization.rs # Raw / CPM / RPKM normalisation
 ├── bamnado-python/   # PyO3 Python extension (cdylib)
-│   ├── src/lib.rs    # Python bindings — exposes get_signal_for_chromosome(), compute_scale_factors()
+│   ├── src/lib.rs    # Python bindings — signal/normalization APIs and CLI bridge
 │   └── python/bamnado/__init__.py
 ├── Cargo.toml        # Workspace root
 └── pyproject.toml    # maturin build config for the Python package
@@ -67,6 +68,9 @@ signal = get_signal_for_chromosome(
 ```
 
 ## CLI Commands
+
+The CLI is also installed by `pip install bamnado`; `split-exogenous` now applies the
+shared read-filter flags, including blacklist and mapping-quality filters.
 
 | Command | Aliases | Description |
 | ------- | ------- | ----------- |

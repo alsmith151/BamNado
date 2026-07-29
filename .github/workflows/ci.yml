@@ -39,6 +39,7 @@ jobs:
           cache-all-crates: "true"
 
       - run: |
+          bash scripts/check-versions.sh
           cargo check -p bamnado
           cargo clippy -p bamnado -- -D warnings
           cargo fmt -- --check
@@ -100,6 +101,7 @@ jobs:
           uv venv
           uv pip install maturin pytest numpy
           source .venv/bin/activate
+          cargo build -p bamnado
           maturin develop
 
       - name: Run tests

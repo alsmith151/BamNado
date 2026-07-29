@@ -302,6 +302,14 @@ count. `--exogenous-prefix` is required and `--bin-size` is ignored for this met
 
 ## Python API
 
+Installing the Python package also installs the `bamnado` CLI, including all Rust CLI
+commands and flags:
+
+```bash
+pip install bamnado
+bamnado bam-coverage --help
+```
+
 BamNado provides Python bindings for high-performance BAM signal generation with flexible read filtering. Install from PyPI:
 
 ```bash
