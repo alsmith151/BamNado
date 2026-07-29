@@ -1,22 +1,22 @@
 {
   "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
-  "extra-files": [
-    {
-      "type": "toml",
-      "path": "bamnado-python/Cargo.toml",
-      "jsonpath": "$.package.version"
-    },
-    {
-      "type": "toml",
-      "path": "pyproject.toml",
-      "jsonpath": "$.project.version"
-    }
-  ],
   "packages": {
     "bamnado": {
       "release-type": "rust",
       "package-name": "bamnado",
-      "include-component-in-tag": false
+      "include-component-in-tag": false,
+      "extra-files": [
+        {
+          "type": "toml",
+          "path": "bamnado-python/Cargo.toml",
+          "jsonpath": "$.package.version"
+        },
+        {
+          "type": "toml",
+          "path": "pyproject.toml",
+          "jsonpath": "$.project.version"
+        }
+      ]
     }
   }
 }
