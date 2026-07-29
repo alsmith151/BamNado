@@ -49,6 +49,12 @@ pub struct BamReadFilterStats {
     n_failed_tag_filter: AtomicU64,
     // Number of reads filtered by fragment length (insert size / TLEN)
     n_failed_fragment_length: AtomicU64,
+    // Number of reads filtered as PCR/optical duplicates
+    n_failed_duplicate: AtomicU64,
+    // Number of reads filtered as secondary alignments
+    n_failed_secondary: AtomicU64,
+    // Number of reads filtered as supplementary alignments
+    n_failed_supplementary: AtomicU64,
 }
 
 impl Default for BamReadFilterStats {
@@ -71,6 +77,9 @@ impl BamReadFilterStats {
             n_incorrect_strand: AtomicU64::new(0),
             n_failed_tag_filter: AtomicU64::new(0),
             n_failed_fragment_length: AtomicU64::new(0),
+            n_failed_duplicate: AtomicU64::new(0),
+            n_failed_secondary: AtomicU64::new(0),
+            n_failed_supplementary: AtomicU64::new(0),
         }
     }
 
@@ -87,6 +96,9 @@ impl BamReadFilterStats {
             n_incorrect_strand: self.n_incorrect_strand.load(Ordering::Relaxed),
             n_failed_tag_filter: self.n_failed_tag_filter.load(Ordering::Relaxed),
             n_failed_fragment_length: self.n_failed_fragment_length.load(Ordering::Relaxed),
+            n_failed_duplicate: self.n_failed_duplicate.load(Ordering::Relaxed),
+            n_failed_secondary: self.n_failed_secondary.load(Ordering::Relaxed),
+            n_failed_supplementary: self.n_failed_supplementary.load(Ordering::Relaxed),
         }
     }
 }
@@ -104,6 +116,9 @@ pub struct BamReadFilterStatsSnapshot {
     n_incorrect_strand: u64,
     n_failed_tag_filter: u64,
     n_failed_fragment_length: u64,
+    n_failed_duplicate: u64,
+    n_failed_secondary: u64,
+    n_failed_supplementary: u64,
 }
 
 impl Display for BamReadFilterStatsSnapshot {
@@ -180,6 +195,9 @@ impl BamReadFilterStatsSnapshot {
         let mut rows = vec![("Initial reads", remaining, 0, 100.0)];
 
         let failures = [
+            ("Not a duplicate", self.n_failed_duplicate),
+            ("Not secondary", self.n_failed_secondary),
+            ("Not supplementary", self.n_failed_supplementary),
             ("Pass strand filter", self.n_incorrect_strand),
             ("Pass proper-pair filter", self.n_failed_proper_pair),
             ("Pass minimum MAPQ", self.n_failed_mapq),
@@ -218,7 +236,10 @@ impl BamReadFilterStatsSnapshot {
                 + self.n_not_in_read_group
                 + self.n_incorrect_strand
                 + self.n_failed_tag_filter
-                + self.n_failed_fragment_length)
+                + self.n_failed_fragment_length
+                + self.n_failed_duplicate
+                + self.n_failed_secondary
+                + self.n_failed_supplementary)
     }
 
     /// Returns the total number of reads processed.
@@ -270,6 +291,21 @@ impl BamReadFilterStatsSnapshot {
     pub fn n_failed_fragment_length(&self) -> u64 {
         self.n_failed_fragment_length
     }
+
+    /// Returns the number of reads filtered as PCR/optical duplicates.
+    pub fn n_failed_duplicate(&self) -> u64 {
+        self.n_failed_duplicate
+    }
+
+    /// Returns the number of reads filtered as secondary alignments.
+    pub fn n_failed_secondary(&self) -> u64 {
+        self.n_failed_secondary
+    }
+
+    /// Returns the number of reads filtered as supplementary alignments.
+    pub fn n_failed_supplementary(&self) -> u64 {
+        self.n_failed_supplementary
+    }
 }
 
 /// A filter for BAM reads.
@@ -302,6 +338,12 @@ pub struct BamReadFilter {
     min_fragment_length: Option<u32>,
     // Maximum fragment length (template length / insert size)
     max_fragment_length: Option<u32>,
+    // Exclude PCR/optical duplicate reads
+    exclude_duplicates: bool,
+    // Exclude secondary alignments
+    exclude_secondary: bool,
+    // Exclude supplementary alignments
+    exclude_supplementary: bool,
     // Statistics for the filtering process
     stats: Arc<BamReadFilterStats>,
 }
@@ -313,6 +355,9 @@ impl Display for BamReadFilter {
         writeln!(f, "\tMinimum mapping quality: {}", self.min_mapq)?;
         writeln!(f, "\tMinimum read length: {}", self.min_length)?;
         writeln!(f, "\tMaximum read length: {}", self.max_length)?;
+        writeln!(f, "\tExclude duplicates: {}", self.exclude_duplicates)?;
+        writeln!(f, "\tExclude secondary: {}", self.exclude_secondary)?;
+        writeln!(f, "\tExclude supplementary: {}", self.exclude_supplementary)?;
 
         match &self.blacklisted_locations {
             Some(blacklisted_locations) => {
@@ -421,8 +466,104 @@ impl BamReadFilter {
             filter_tag_value,
             min_fragment_length,
             max_fragment_length,
+            exclude_duplicates: false,
+            exclude_secondary: false,
+            exclude_supplementary: false,
             stats: Arc::new(BamReadFilterStats::new()),
         }
+    }
+
+    /// Exclude PCR/optical duplicate reads (SAM flag 0x400).
+    pub fn with_exclude_duplicates(mut self, v: bool) -> Self {
+        self.exclude_duplicates = v;
+        self
+    }
+
+    /// Exclude secondary alignments (SAM flag 0x100).
+    pub fn with_exclude_secondary(mut self, v: bool) -> Self {
+        self.exclude_secondary = v;
+        self
+    }
+
+    /// Exclude supplementary alignments (SAM flag 0x800).
+    pub fn with_exclude_supplementary(mut self, v: bool) -> Self {
+        self.exclude_supplementary = v;
+        self
+    }
+
+    /// Set the strand to keep.
+    pub fn with_strand(mut self, v: bio_types::strand::Strand) -> Self {
+        self.strand = v;
+        self
+    }
+
+    /// Keep only properly paired reads.
+    pub fn with_proper_pair(mut self, v: bool) -> Self {
+        self.proper_pair = v;
+        self
+    }
+
+    /// Set the minimum mapping quality.
+    pub fn with_min_mapq(mut self, v: u8) -> Self {
+        self.min_mapq = v;
+        self
+    }
+
+    /// Set the minimum read length.
+    pub fn with_min_length(mut self, v: u32) -> Self {
+        self.min_length = v;
+        self
+    }
+
+    /// Set the maximum read length.
+    pub fn with_max_length(mut self, v: u32) -> Self {
+        self.max_length = v;
+        self
+    }
+
+    /// Set the read group to keep.
+    pub fn with_read_group(mut self, v: Option<String>) -> Self {
+        self.read_group = v;
+        self
+    }
+
+    /// Set the blacklisted locations (chromosome ID -> `Lapper`).
+    pub fn with_blacklisted_locations(
+        mut self,
+        v: Option<HashMap<usize, Lapper<usize, u32>>>,
+    ) -> Self {
+        self.blacklisted_locations = v;
+        self
+    }
+
+    /// Set the whitelisted cell barcodes.
+    pub fn with_whitelisted_barcodes(mut self, v: Option<HashSet<String>>) -> Self {
+        self.whitelisted_barcodes = v;
+        self
+    }
+
+    /// Set the SAM tag to filter by.
+    pub fn with_filter_tag(mut self, v: Option<String>) -> Self {
+        self.filter_tag = v;
+        self
+    }
+
+    /// Set the required value for `filter_tag`.
+    pub fn with_filter_tag_value(mut self, v: Option<String>) -> Self {
+        self.filter_tag_value = v;
+        self
+    }
+
+    /// Set the minimum fragment length (template/insert size).
+    pub fn with_min_fragment_length(mut self, v: Option<u32>) -> Self {
+        self.min_fragment_length = v;
+        self
+    }
+
+    /// Set the maximum fragment length (template/insert size).
+    pub fn with_max_fragment_length(mut self, v: Option<u32>) -> Self {
+        self.max_fragment_length = v;
+        self
     }
 
     /// Checks if a read is valid according to the filter criteria.
@@ -442,6 +583,26 @@ impl BamReadFilter {
                 return Ok(false);
             }
         };
+
+        // Filter by duplicate/secondary/supplementary flags (cheapest checks first).
+        if self.exclude_duplicates && flags.is_duplicate() {
+            self.stats
+                .n_failed_duplicate
+                .fetch_add(1, Ordering::Relaxed);
+            return Ok(false);
+        }
+        if self.exclude_secondary && flags.is_secondary() {
+            self.stats
+                .n_failed_secondary
+                .fetch_add(1, Ordering::Relaxed);
+            return Ok(false);
+        }
+        if self.exclude_supplementary && flags.is_supplementary() {
+            self.stats
+                .n_failed_supplementary
+                .fetch_add(1, Ordering::Relaxed);
+            return Ok(false);
+        }
 
         // Filter by strand.
         match flags.is_reverse_complemented() {
@@ -659,5 +820,81 @@ where
         Some(barcode.to_string())
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use noodles::sam::alignment::RecordBuf;
+    use noodles::sam::alignment::record::Flags;
+
+    fn record_with_flags(flags: Flags) -> RecordBuf {
+        let mut record = RecordBuf::default();
+        *record.flags_mut() = flags;
+        record
+    }
+
+    #[test]
+    fn test_exclude_duplicates_filters_duplicate_reads() {
+        let filter = BamReadFilter::default().with_exclude_duplicates(true);
+        let record = record_with_flags(Flags::DUPLICATE);
+        let valid = filter.is_valid(&record, None).expect("is_valid errored");
+        assert!(!valid);
+        assert_eq!(filter.stats().n_failed_duplicate(), 1);
+    }
+
+    #[test]
+    fn test_exclude_secondary_filters_secondary_reads() {
+        let filter = BamReadFilter::default().with_exclude_secondary(true);
+        let record = record_with_flags(Flags::SECONDARY);
+        let valid = filter.is_valid(&record, None).expect("is_valid errored");
+        assert!(!valid);
+        assert_eq!(filter.stats().n_failed_secondary(), 1);
+    }
+
+    #[test]
+    fn test_exclude_supplementary_filters_supplementary_reads() {
+        let filter = BamReadFilter::default().with_exclude_supplementary(true);
+        let record = record_with_flags(Flags::SUPPLEMENTARY);
+        let valid = filter.is_valid(&record, None).expect("is_valid errored");
+        assert!(!valid);
+        assert_eq!(filter.stats().n_failed_supplementary(), 1);
+    }
+
+    #[test]
+    fn test_builder_methods_chain_and_apply() {
+        let filter = BamReadFilter::default()
+            .with_min_mapq(30)
+            .with_min_length(50)
+            .with_max_length(500)
+            .with_proper_pair(false)
+            .with_strand(bio_types::strand::Strand::Forward)
+            .with_read_group(Some("RG1".to_string()))
+            .with_filter_tag(Some("VP".to_string()))
+            .with_filter_tag_value(Some("BCL2".to_string()))
+            .with_min_fragment_length(Some(100))
+            .with_max_fragment_length(Some(200))
+            .with_exclude_duplicates(true);
+
+        // Duplicate exclusion is checked first, so a duplicate read is rejected
+        // regardless of the other builder settings above.
+        let record = record_with_flags(Flags::DUPLICATE);
+        let valid = filter.is_valid(&record, None).expect("is_valid errored");
+        assert!(!valid);
+        assert_eq!(filter.stats().n_failed_duplicate(), 1);
+    }
+
+    #[test]
+    fn test_exclude_flags_default_off_does_not_filter() {
+        let filter = BamReadFilter::default();
+        let record = record_with_flags(Flags::DUPLICATE | Flags::SECONDARY | Flags::SUPPLEMENTARY);
+        // The record is missing a header/alignment position, so the overall filter may
+        // still fail or error further down the chain; we only care that the new
+        // duplicate/secondary/supplementary counters stay untouched when disabled.
+        let _ = filter.is_valid(&record, None);
+        assert_eq!(filter.stats().n_failed_duplicate(), 0);
+        assert_eq!(filter.stats().n_failed_secondary(), 0);
+        assert_eq!(filter.stats().n_failed_supplementary(), 0);
     }
 }
