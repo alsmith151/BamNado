@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0](https://github.com/alsmith151/BamNado/compare/v0.8.1...v0.9.0) (2026-07-29)
+
+
+### Features
+
+* **bam-normalize:** Add bam-normalize CLI command ([#93](https://github.com/alsmith151/BamNado/issues/93)) ([ecde839](https://github.com/alsmith151/BamNado/commit/ecde839a954f840c136f07484cd0c2d8009966a2))
+* **CLI:** Expose Rust CLI in Python ([#95](https://github.com/alsmith151/BamNado/issues/95)) ([ce6d0d4](https://github.com/alsmith151/BamNado/commit/ce6d0d43ce363670a0e4b327e654f4aca42c22db))
+
 ## [0.8.1](https://github.com/alsmith151/BamNado/compare/v0.8.0...v0.8.1) (2026-05-26)
 
 
