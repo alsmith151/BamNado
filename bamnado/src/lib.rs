@@ -17,8 +17,10 @@
 //! *   [`bam_modifier`]: Tools for modifying BAM records.
 //! *   [`bam_splitter`]: Functionality for splitting BAM files.
 //! *   [`bam_utils`]: General utilities and statistics for BAM files.
+//! *   [`bin_counts`]: Parallel per-bin read counting across BAM files.
 //! *   [`coverage_analysis`]: Core logic for generating coverage tracks.
 //! *   [`genomic_intervals`]: Handling of genomic coordinates and intervals.
+//! *   [`normalization_factors`]: Between-sample scaling factor estimation (TMM, CPM, etc.).
 //! *   [`read_filter`]: Structures and traits for filtering reads.
 //! *   [`signal_normalization`]: Normalization strategies for coverage data.
 //! *   [`spike_in_analysis`]: Analysis tools for spike-in normalization.
@@ -32,8 +34,10 @@ pub mod bam_utils;
 pub mod bedgraph_utils;
 pub mod bigwig_compare;
 pub mod bigwig_infer_scale;
+pub mod bin_counts;
 pub mod coverage_analysis;
 pub mod genomic_intervals;
+pub mod normalization_factors;
 pub mod read_filter;
 pub mod signal_normalization;
 pub mod spike_in_analysis;

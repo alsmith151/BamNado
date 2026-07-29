@@ -127,6 +127,22 @@ struct FilterOptions {
         value_name = "BP"
     )]
     max_fragment_length: Option<u32>,
+
+    /// Exclude PCR/optical duplicate reads.
+    #[arg(
+        long = "ignore-duplicates",
+        visible_alias = "no-duplicates",
+        action = clap::ArgAction::SetTrue
+    )]
+    ignore_duplicates: bool,
+
+    /// Exclude secondary alignments.
+    #[arg(long = "ignore-secondary", action = clap::ArgAction::SetTrue)]
+    ignore_secondary: bool,
+
+    /// Exclude supplementary alignments.
+    #[arg(long = "ignore-supplementary", action = clap::ArgAction::SetTrue)]
+    ignore_supplementary: bool,
 }
 
 // Common coverage options for both single and multi-BAM operations
@@ -413,6 +429,87 @@ enum Commands {
         #[arg(long, value_name = "N", default_value = "512")]
         max_starts: usize,
     },
+
+    /// Compute between-sample scaling factors from BAM files.
+    #[command(
+        name = "bam-normalize",
+        visible_alias = "norm-factors",
+        after_help = "Example:\n  bamnado bam-normalize -b chip1.bam -b chip2.bam \\\n    --method csaw-background --bin-size 10000 --blacklist blacklist.bed"
+    )]
+    BamNormalize {
+        /// Input BAM files. Repeat the flag for each sample.
+        #[arg(short, long, value_name = "BAM")]
+        bams: Vec<PathBuf>,
+
+        /// CSV sample sheet with `sample` and `bam` columns. Alternative to --bams.
+        #[arg(long, value_name = "CSV")]
+        sample_sheet: Option<PathBuf>,
+
+        /// Normalization method.
+        #[arg(
+            short,
+            long,
+            value_enum,
+            default_value = "csaw-background",
+            value_name = "METHOD"
+        )]
+        method: bamnado::normalization_factors::NormFactorMethod,
+
+        /// Bin size for background windows.
+        #[arg(short = 's', long, default_value = "10000", value_name = "BP")]
+        bin_size: u64,
+
+        /// Drop this percentage of highest-count bins before estimating (likely enriched).
+        #[arg(long, default_value = "5.0", value_name = "PCT")]
+        exclude_top_percent: f64,
+
+        /// Sample name to use as the TMM reference. Defaults to the library size closest to the geometric mean.
+        #[arg(long, value_name = "NAME")]
+        reference_sample: Option<String>,
+
+        /// TMM trim fraction for M-values.
+        #[arg(long, default_value = "0.3", value_name = "FRACTION")]
+        logratio_trim: f64,
+
+        /// TMM trim fraction for A-values.
+        #[arg(long, default_value = "0.05", value_name = "FRACTION")]
+        sum_trim: f64,
+
+        /// Reference-name prefix identifying spike-in sequences (--method spike-in).
+        #[arg(short, long, value_name = "PREFIX")]
+        exogenous_prefix: Option<String>,
+
+        /// Count fragments instead of individual read alignments.
+        #[arg(
+            long = "fragment-counts",
+            visible_alias = "use-fragment",
+            action = clap::ArgAction::SetTrue
+        )]
+        use_fragment: bool,
+
+        /// Skip scaffold or unplaced chromosomes.
+        #[arg(
+            long = "ignore-scaffolds",
+            visible_alias = "ignore-scaffold",
+            action = clap::ArgAction::SetTrue
+        )]
+        ignore_scaffold: bool,
+
+        /// Write the bin count matrix to this TSV for QC (e.g. M-A plots).
+        #[arg(long, value_name = "TSV")]
+        counts_out: Option<PathBuf>,
+
+        /// Output format.
+        #[arg(long, value_enum, default_value = "table")]
+        format: NormalizeFormat,
+
+        /// Write output to FILE instead of stdout.
+        #[arg(short, long, value_name = "FILE")]
+        output: Option<PathBuf>,
+
+        #[command(flatten)]
+        filter_options: FilterOptions,
+    },
 }
 
 #[derive(Debug, Clone, clap::ValueEnum)]
@@ -420,6 +517,44 @@ enum InferScaleFormat {
     Table,
     Tsv,
     Json,
+}
+
+#[derive(Debug, Clone, clap::ValueEnum)]
+enum NormalizeFormat {
+    Table,
+    Tsv,
+    Json,
+}
+
+/// Read a CSV sample sheet with `sample` and `bam` columns.
+fn read_sample_sheet(path: &Path) -> Result<(Vec<PathBuf>, Vec<String>)> {
+    let df = CsvReadOptions::default()
+        .with_has_header(true)
+        .try_into_reader_with_file_path(Some(path.to_path_buf()))?
+        .finish()
+        .context("Failed to read sample sheet")?;
+
+    let sample_col = df
+        .column("sample")
+        .context("Missing 'sample' column in sample sheet")?
+        .str()
+        .context("'sample' column is not string type")?;
+    let bam_col = df
+        .column("bam")
+        .context("Missing 'bam' column in sample sheet")?
+        .str()
+        .context("'bam' column is not string type")?;
+
+    let mut samples = Vec::new();
+    let mut bams = Vec::new();
+    for (sample, bam) in sample_col.into_iter().zip(bam_col) {
+        let sample = sample.ok_or_else(|| anyhow::anyhow!("Null value in 'sample' column"))?;
+        let bam = bam.ok_or_else(|| anyhow::anyhow!("Null value in 'bam' column"))?;
+        samples.push(sample.to_string());
+        bams.push(PathBuf::from(bam));
+    }
+
+    Ok((bams, samples))
 }
 
 // Helper functions to reduce code duplication
@@ -490,6 +625,15 @@ fn log_active_filters(filter_options: &FilterOptions) {
     if let Some(tag) = &filter_options.filter_tag {
         let value = filter_options.filter_tag_value.as_deref().unwrap_or("*");
         rows.push(("tag", format!("{tag}={value}")));
+    }
+    if filter_options.ignore_duplicates {
+        rows.push(("duplicates", "excluded".to_string()));
+    }
+    if filter_options.ignore_secondary {
+        rows.push(("secondary alignments", "excluded".to_string()));
+    }
+    if filter_options.ignore_supplementary {
+        rows.push(("supplementary alignments", "excluded".to_string()));
     }
 
     let mut table = Table::new();
@@ -577,7 +721,10 @@ fn create_filter_from_options(
         filter_options.filter_tag_value.clone(),
         filter_options.min_fragment_length,
         filter_options.max_fragment_length,
-    ))
+    )
+    .with_exclude_duplicates(filter_options.ignore_duplicates)
+    .with_exclude_secondary(filter_options.ignore_secondary)
+    .with_exclude_supplementary(filter_options.ignore_supplementary))
 }
 
 fn process_output_file_type(output: &Path) -> Result<FileType> {
@@ -750,7 +897,10 @@ fn main() -> Result<()> {
                     filter_options.filter_tag_value.clone(),
                     filter_options.min_fragment_length,
                     filter_options.max_fragment_length,
-                );
+                )
+                .with_exclude_duplicates(filter_options.ignore_duplicates)
+                .with_exclude_secondary(filter_options.ignore_secondary)
+                .with_exclude_supplementary(filter_options.ignore_supplementary);
 
                 // Create pileup
                 pileups.push(bamnado::coverage_analysis::BamPileup::new(
@@ -1163,6 +1313,221 @@ fn main() -> Result<()> {
                     }
                 }
                 InferScaleFormat::Json => {
+                    buf = serde_json::to_string_pretty(&result)?;
+                    buf.push('\n');
+                }
+            }
+
+            match output {
+                Some(path) => std::fs::write(path, &buf)
+                    .with_context(|| format!("Cannot write to {}", path.display()))?,
+                None => print!("{buf}"),
+            }
+        }
+
+        Commands::BamNormalize {
+            bams,
+            sample_sheet,
+            method,
+            bin_size,
+            exclude_top_percent,
+            reference_sample,
+            logratio_trim,
+            sum_trim,
+            exogenous_prefix,
+            use_fragment,
+            ignore_scaffold,
+            counts_out,
+            format,
+            output,
+            filter_options,
+        } => {
+            use bamnado::normalization_factors::NormFactorMethod;
+
+            let (bam_paths, sample_names) = match (sample_sheet, bams.is_empty()) {
+                (Some(sheet), true) => read_sample_sheet(sheet)?,
+                (None, false) => {
+                    let mut names: Vec<String> = bams
+                        .iter()
+                        .map(|b| {
+                            b.file_stem()
+                                .and_then(|s| s.to_str())
+                                .map(String::from)
+                                .unwrap_or_else(|| b.display().to_string())
+                        })
+                        .collect();
+
+                    // Disambiguate duplicate sample names (e.g. the same BAM passed twice)
+                    // so per-sample columns/labels stay unique downstream.
+                    let mut occurrences: std::collections::HashMap<String, usize> =
+                        std::collections::HashMap::new();
+                    for name in &names {
+                        *occurrences.entry(name.clone()).or_insert(0) += 1;
+                    }
+                    if occurrences.values().any(|&count| count > 1) {
+                        let mut seen_so_far: std::collections::HashMap<String, usize> =
+                            std::collections::HashMap::new();
+                        for name in names.iter_mut() {
+                            let total = occurrences[name.as_str()];
+                            let seen = seen_so_far.entry(name.clone()).or_insert(0);
+                            *seen += 1;
+                            if total > 1 {
+                                *name = format!("{name}_{seen}");
+                            }
+                        }
+                    }
+
+                    (bams.clone(), names)
+                }
+                (Some(_), false) => {
+                    return Err(anyhow::anyhow!(
+                        "Provide either --bams or --sample-sheet, not both"
+                    ));
+                }
+                (None, true) => {
+                    return Err(anyhow::anyhow!("Provide either --bams or --sample-sheet"));
+                }
+            };
+
+            let min_samples = match method {
+                NormFactorMethod::Tmm
+                | NormFactorMethod::CsawBackground
+                | NormFactorMethod::MedianOfRatios => 2,
+                NormFactorMethod::Cpm | NormFactorMethod::SpikeIn => 1,
+            };
+            anyhow::ensure!(
+                bam_paths.len() >= min_samples,
+                "{method:?} requires at least {min_samples} sample(s), got {}",
+                bam_paths.len()
+            );
+
+            for bam in &bam_paths {
+                validate_bam_file(bam)?;
+            }
+
+            log_active_filters(filter_options);
+
+            let bam_stats: Vec<bamnado::BamStats> = bam_paths
+                .iter()
+                .map(|p| {
+                    bamnado::BamStats::new(p.clone())
+                        .with_context(|| format!("Failed to read BAM stats for {}", p.display()))
+                })
+                .collect::<Result<Vec<_>>>()?;
+
+            let filters: Vec<bamnado::read_filter::BamReadFilter> = bam_stats
+                .iter()
+                .map(|stats| create_filter_from_options(filter_options, Some(stats)))
+                .collect::<Result<Vec<_>>>()?;
+
+            let result = if matches!(method, NormFactorMethod::SpikeIn) {
+                let prefix = exogenous_prefix.clone().ok_or_else(|| {
+                    anyhow::anyhow!("--exogenous-prefix is required for --method spike-in")
+                })?;
+                bamnado::normalization_factors::spike_in_scale_factors(
+                    &bam_stats,
+                    &sample_names,
+                    &prefix,
+                )
+                .context("Failed to compute spike-in scale factors")?
+            } else {
+                let counts = bamnado::bin_counts::count_bins(
+                    &bam_paths,
+                    &sample_names,
+                    *bin_size,
+                    &filters,
+                    *use_fragment,
+                    *ignore_scaffold,
+                )
+                .context("Failed to count reads per bin")?;
+
+                if let Some(counts_out_path) = counts_out {
+                    let mut df = counts.to_polars()?;
+                    let mut file = std::fs::File::create(counts_out_path)
+                        .context("Failed to create --counts-out file")?;
+                    CsvWriter::new(&mut file)
+                        .include_header(true)
+                        .with_separator(b'\t')
+                        .finish(&mut df)?;
+                }
+
+                let params = bamnado::normalization_factors::NormFactorParams {
+                    reference_sample: reference_sample.clone(),
+                    logratio_trim: *logratio_trim,
+                    sum_trim: *sum_trim,
+                    exclude_top_percent: *exclude_top_percent,
+                    ..Default::default()
+                };
+
+                bamnado::normalization_factors::compute_scale_factors(&counts, method, &params)
+                    .context("Failed to compute scale factors")?
+            };
+
+            let mut buf = String::new();
+            match format {
+                NormalizeFormat::Table => {
+                    let mut table = Table::new();
+                    table
+                        .load_preset(UTF8_FULL)
+                        .apply_modifier(UTF8_ROUND_CORNERS)
+                        .set_content_arrangement(ContentArrangement::Dynamic)
+                        .set_header(vec![
+                            "sample",
+                            "library_size",
+                            "norm_factor",
+                            "scale_factor",
+                            "reference",
+                        ]);
+
+                    for i in 0..result.sample_names.len() {
+                        let is_ref = result.reference_sample.as_deref()
+                            == Some(result.sample_names[i].as_str());
+                        table.add_row(vec![
+                            Cell::new(&result.sample_names[i]),
+                            Cell::new(result.library_sizes[i].to_string())
+                                .set_alignment(CellAlignment::Right),
+                            Cell::new(format!("{:.6}", result.norm_factors[i]))
+                                .set_alignment(CellAlignment::Right),
+                            Cell::new(format!("{:.6}", result.scale_factors[i]))
+                                .set_alignment(CellAlignment::Right),
+                            Cell::new(if is_ref { "yes" } else { "-" })
+                                .set_alignment(CellAlignment::Right),
+                        ]);
+                    }
+
+                    use std::fmt::Write as _;
+                    writeln!(buf, "{table}").unwrap();
+                    writeln!(buf, "method: {}", result.method).unwrap();
+                    writeln!(
+                        buf,
+                        "bins: {} used / {} total",
+                        result.n_bins_used, result.n_bins_total
+                    )
+                    .unwrap();
+                }
+                NormalizeFormat::Tsv => {
+                    use std::fmt::Write as _;
+                    writeln!(
+                        buf,
+                        "sample\tlibrary_size\tnorm_factor\tscale_factor\treference"
+                    )
+                    .unwrap();
+                    for i in 0..result.sample_names.len() {
+                        let is_ref = result.reference_sample.as_deref()
+                            == Some(result.sample_names[i].as_str());
+                        writeln!(
+                            buf,
+                            "{}\t{}\t{:.6}\t{:.6}\t{}",
+                            result.sample_names[i],
+                            result.library_sizes[i],
+                            result.norm_factors[i],
+                            result.scale_factors[i],
+                            if is_ref { "yes" } else { "-" }
+                        )
+                        .unwrap();
+                    }
+                }
+                NormalizeFormat::Json => {
                     buf = serde_json::to_string_pretty(&result)?;
                     buf.push('\n');
                 }

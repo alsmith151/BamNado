@@ -1,7 +1,7 @@
 import pytest
 import os
 import numpy as np
-from bamnado import get_signal_for_chromosome
+from bamnado import get_signal_for_chromosome, compute_scale_factors
 
 @pytest.fixture
 def bam_file():
@@ -48,3 +48,49 @@ def test_get_signal_invalid_chrom(bam_file):
             False,
             True
         )
+
+
+def test_compute_scale_factors_tmm(bam_file):
+    """Test computing TMM scale factors for two (identical) samples."""
+    result = compute_scale_factors([bam_file, bam_file], method="tmm")
+
+    assert len(result.sample_names) == 2
+    assert len(result.scale_factors) == 2
+    assert len(result.norm_factors) == 2
+    assert len(result.library_sizes) == 2
+    for factor in result.scale_factors:
+        assert factor == pytest.approx(1.0)
+
+
+def test_compute_scale_factors_return_counts(bam_file):
+    """Test that return_counts=True populates a 2D bin count matrix."""
+    result = compute_scale_factors(
+        [bam_file, bam_file], method="tmm", return_counts=True
+    )
+
+    counts = result.counts()
+    assert counts is not None
+    assert counts.ndim == 2
+    assert counts.dtype == np.uint64
+    assert counts.shape[1] == 2
+    assert counts.shape[0] == len(result.bin_chroms)
+    assert counts.shape[0] == len(result.bin_starts)
+    assert counts.shape[0] == len(result.bin_ends)
+
+
+def test_compute_scale_factors_no_counts_by_default(bam_file):
+    """Test that counts() is None unless return_counts=True."""
+    result = compute_scale_factors([bam_file, bam_file], method="cpm")
+    assert result.counts() is None
+
+
+def test_compute_scale_factors_invalid_method(bam_file):
+    """Test that an invalid method string raises ValueError."""
+    with pytest.raises(ValueError):
+        compute_scale_factors([bam_file, bam_file], method="not-a-method")
+
+
+def test_compute_scale_factors_nonexistent_bam():
+    """Test that a nonexistent BAM file raises RuntimeError."""
+    with pytest.raises(RuntimeError):
+        compute_scale_factors(["does_not_exist.bam"], method="cpm")
