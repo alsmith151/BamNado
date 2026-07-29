@@ -27,7 +27,7 @@ use std::str::FromStr;
 use std::sync::OnceLock;
 
 /// The cell barcode tag (CB).
-pub const CB: [u8; 2] = [b'C', b'B'];
+pub const CB: [u8; 2] = *b"CB";
 /// Type alias for an interval with a `u32` value.
 pub type Iv = Interval<usize, u32>;
 const BAMNADO_PROGRAM_ID: &str = "bamnado";
@@ -359,7 +359,7 @@ impl BamStats {
 
         let mut mapped_record_count = 0;
 
-        for (_, stats) in chrom_stats.iter() {
+        for stats in chrom_stats.values() {
             mapped_record_count += stats.mapped;
             unmapped_record_count += stats.unmapped;
         }
