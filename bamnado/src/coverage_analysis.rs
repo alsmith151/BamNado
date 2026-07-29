@@ -9,9 +9,8 @@
 
 use std::fmt::{Display, Formatter, Result as FmtResult};
 use std::path::PathBuf;
-use std::sync::OnceLock;
 
-use crate::bam_utils::{BamStats, Iv, get_bam_header, progress_bar};
+use crate::bam_utils::{BamStats, Iv, bin_intervals, get_bam_header, is_scaffold, progress_bar};
 use crate::genomic_intervals::{IntervalMaker, Shift, Truncate};
 use crate::read_filter::BamReadFilter;
 use crate::signal_normalization::NormalizationMethod;
@@ -31,16 +30,7 @@ use noodles::bam;
 use polars::lazy::dsl::col;
 use polars::prelude::*;
 use rayon::prelude::*;
-use regex::Regex;
 use rust_lapper::Lapper;
-
-/// Check if a chromosome name is a scaffold.
-fn is_scaffold(name: &str) -> bool {
-    static SCAFFOLD_REGEX: OnceLock<Regex> = OnceLock::new();
-    SCAFFOLD_REGEX
-        .get_or_init(|| Regex::new(r"^chrUn|_alt$|_random$").unwrap())
-        .is_match(name)
-}
 
 fn shift_is_noop(shift: Shift) -> bool {
     shift.five_prime == 0
@@ -289,6 +279,18 @@ impl BamPileup {
                 stats.n_failed_fragment_length()
             );
         }
+        if stats.n_failed_duplicate() > 0 {
+            debug!("  - Filtered as duplicate: {}", stats.n_failed_duplicate());
+        }
+        if stats.n_failed_secondary() > 0 {
+            debug!("  - Filtered as secondary: {}", stats.n_failed_secondary());
+        }
+        if stats.n_failed_supplementary() > 0 {
+            debug!(
+                "  - Filtered as supplementary: {}",
+                stats.n_failed_supplementary()
+            );
+        }
     }
 
     /// Create a new [`BamPileup`].
@@ -386,44 +388,16 @@ impl BamPileup {
                     .end()
                     .context("Failed to get region end")?
                     .get();
-                let mut bin_counts: Vec<Iv> = Vec::new();
                 // Bin coordinates are 1-based (noodles/SAM convention); region_start comes
                 // from Position::get() which is always ≥ 1. Conversion to 0-based happens
                 // at write time in to_bigwig().
-                let mut start = region_start;
-                while start < region_end {
-                    let end = (start + self.bin_size as usize).min(region_end);
-                    let count = lapper.count(start, end);
-                    match self.collapse {
-                        true => {
-                            if let Some(last) = bin_counts.last_mut() {
-                                if last.val == count as u32 {
-                                    last.stop = end;
-                                } else {
-                                    bin_counts.push(Iv {
-                                        start,
-                                        stop: end,
-                                        val: count as u32,
-                                    });
-                                }
-                            } else {
-                                bin_counts.push(Iv {
-                                    start,
-                                    stop: end,
-                                    val: count as u32,
-                                });
-                            }
-                        }
-                        false => {
-                            bin_counts.push(Iv {
-                                start,
-                                stop: end,
-                                val: count as u32,
-                            });
-                        }
-                    }
-                    start = end;
-                }
+                let bin_counts = bin_intervals(
+                    &lapper,
+                    region_start,
+                    region_end,
+                    self.bin_size,
+                    self.collapse,
+                );
                 Ok(bin_counts)
             })
             // Combine the results from parallel threads, propagating any errors.
@@ -521,42 +495,13 @@ impl BamPileup {
                     .context("Failed to get region end")?
                     .get();
 
-                let mut bin_counts: Vec<rust_lapper::Interval<usize, u32>> = Vec::new();
-                let mut start = region_start;
-                while start < region_end {
-                    let end = (start + self.bin_size as usize).min(region_end);
-                    let count = lapper.count(start, end);
-
-                    match self.collapse {
-                        true => {
-                            if let Some(last) = bin_counts.last_mut() {
-                                if last.val == count as u32 {
-                                    last.stop = end;
-                                } else {
-                                    bin_counts.push(rust_lapper::Interval {
-                                        start,
-                                        stop: end,
-                                        val: count as u32,
-                                    });
-                                }
-                            } else {
-                                bin_counts.push(rust_lapper::Interval {
-                                    start,
-                                    stop: end,
-                                    val: count as u32,
-                                });
-                            }
-                        }
-                        false => {
-                            bin_counts.push(rust_lapper::Interval {
-                                start,
-                                stop: end,
-                                val: count as u32,
-                            });
-                        }
-                    }
-                    start = end;
-                }
+                let bin_counts = bin_intervals(
+                    &lapper,
+                    region_start,
+                    region_end,
+                    self.bin_size,
+                    self.collapse,
+                );
 
                 Ok((region.name().to_owned().to_string(), bin_counts))
             })

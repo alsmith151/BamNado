@@ -18,11 +18,13 @@ use noodles::core::{Position, Region};
 use noodles::sam::header::record::value::{Map, map::Program, map::program::tag as pg_tag};
 use noodles::{bam, bed, sam};
 use polars::prelude::*;
+use regex::Regex;
 use rust_lapper::Interval;
 use rust_lapper::Lapper;
 use std::ops::Bound;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use std::sync::OnceLock;
 
 /// The cell barcode tag (CB).
 pub const CB: [u8; 2] = [b'C', b'B'];
@@ -31,6 +33,62 @@ pub type Iv = Interval<usize, u32>;
 const BAMNADO_PROGRAM_ID: &str = "bamnado";
 const BAMNADO_PROGRAM_NAME: &str = "bamnado";
 const BAMNADO_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// Check if a chromosome name is a scaffold / unplaced contig.
+pub(crate) fn is_scaffold(name: &str) -> bool {
+    static SCAFFOLD_REGEX: OnceLock<Regex> = OnceLock::new();
+    SCAFFOLD_REGEX
+        .get_or_init(|| Regex::new(r"^chrUn|_alt$|_random$").unwrap())
+        .is_match(name)
+}
+
+/// Bin a `Lapper` of read intervals into fixed-width bins over `[region_start, region_end)`.
+///
+/// Coordinates are 1-based (noodles/SAM convention); see `BamStats::genome_chunks`.
+pub fn bin_intervals(
+    lapper: &Lapper<usize, u32>,
+    region_start: usize,
+    region_end: usize,
+    bin_size: u64,
+    collapse: bool,
+) -> Vec<Iv> {
+    let mut bin_counts: Vec<Iv> = Vec::new();
+    let mut start = region_start;
+    while start < region_end {
+        let end = (start + bin_size as usize).min(region_end);
+        let count = lapper.count(start, end);
+        match collapse {
+            true => {
+                if let Some(last) = bin_counts.last_mut() {
+                    if last.val == count as u32 {
+                        last.stop = end;
+                    } else {
+                        bin_counts.push(Iv {
+                            start,
+                            stop: end,
+                            val: count as u32,
+                        });
+                    }
+                } else {
+                    bin_counts.push(Iv {
+                        start,
+                        stop: end,
+                        val: count as u32,
+                    });
+                }
+            }
+            false => {
+                bin_counts.push(Iv {
+                    start,
+                    stop: end,
+                    val: count as u32,
+                });
+            }
+        }
+        start = end;
+    }
+    bin_counts
+}
 
 /// Represents the strand of a genomic feature.
 #[derive(Debug, Clone, PartialEq, Eq, Copy)]
@@ -460,6 +518,28 @@ impl BamStats {
     /// Returns the number of mapped reads.
     pub fn n_mapped(&self) -> u64 {
         self.n_mapped
+    }
+
+    /// Mapped reads split by reference-name prefix, read from the BAI index (no record scan).
+    ///
+    /// These counts come from BAI index metadata, so they are unfiltered by MAPQ,
+    /// duplicate, or secondary/supplementary status — the same basis as [`BamStats::n_mapped`].
+    ///
+    /// # Returns
+    ///
+    /// `(with_prefix, without_prefix)` — mapped read counts for reference sequences whose
+    /// name starts with `prefix`, and for all other reference sequences, respectively.
+    pub fn mapped_reads_by_prefix(&self, prefix: &str) -> (u64, u64) {
+        let mut with_prefix = 0u64;
+        let mut without_prefix = 0u64;
+        for (name, stats) in self.chrom_stats.iter() {
+            if name.starts_with(prefix) {
+                with_prefix += stats.mapped;
+            } else {
+                without_prefix += stats.mapped;
+            }
+        }
+        (with_prefix, without_prefix)
     }
 
     /// Returns the number of unmapped reads.
