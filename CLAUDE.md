@@ -13,10 +13,12 @@ BamNado/
 │       ├── coverage_analysis.rs    # BamPileup — parallel pileup/coverage engine
 │       ├── read_filter.rs          # BamReadFilter — per-read filtering logic
 │       ├── genomic_intervals.rs    # IntervalMaker — BAM record → genomic interval
-│       ├── bam_utils.rs            # BamStats, helpers, Iv type alias
+│       ├── bam_utils.rs            # BamStats, helpers, Iv type alias, bin_intervals()
+│       ├── bin_counts.rs           # BinCounts, count_bins() — shared per-sample bin count matrix
+│       ├── normalization_factors.rs # TMM / csaw-background / CPM / median-of-ratios / spike-in scale factors
 │       └── signal_normalization.rs # Raw / CPM / RPKM normalisation
 ├── bamnado-python/   # PyO3 Python extension (cdylib)
-│   ├── src/lib.rs    # Python bindings — exposes get_signal_for_chromosome()
+│   ├── src/lib.rs    # Python bindings — exposes get_signal_for_chromosome(), compute_scale_factors()
 │   └── python/bamnado/__init__.py
 ├── Cargo.toml        # Workspace root
 └── pyproject.toml    # maturin build config for the Python package
@@ -27,10 +29,12 @@ BamNado/
 | Type | Location | Purpose |
 | ---- | -------- | ------- |
 | `BamPileup` | `coverage_analysis.rs` | Parallel per-chromosome coverage computation |
-| `BamReadFilter` | `read_filter.rs` | Multi-criterion read filter (strand, MAPQ, length, fragment length, blacklist, barcode…) |
+| `BamReadFilter` | `read_filter.rs` | Multi-criterion read filter (strand, MAPQ, length, fragment length, blacklist, barcode, duplicate/secondary/supplementary…) |
 | `IntervalMaker` | `genomic_intervals.rs` | Converts BAM records to `Iv` intervals (fragment or read mode, with optional shift/truncate) |
 | `Iv` | `bam_utils.rs` | `Interval<usize, u32>` from `rust-lapper` |
 | `Shift` / `Truncate` | `genomic_intervals.rs` | 5′/3′ coordinate adjustments (e.g. Tn5) |
+| `BinCounts` | `bin_counts.rs` | Shared sample × bin read-count matrix across one or more BAM files |
+| `NormFactorEstimator` | `normalization_factors.rs` | Pluggable between-sample scaling factor strategy (`Tmm`, `CsawBackground`, `Cpm`, `MedianOfRatios`); `SpikeIn` is handled separately via `spike_in_scale_factors()` since it reads the BAM index directly rather than a bin matrix |
 
 ## Python API
 
@@ -74,6 +78,7 @@ signal = get_signal_for_chromosome(
 | `bigwig-compare` | `compare-bigwigs` | Compare two BigWig files bin by bin |
 | `bigwig-aggregate` | `aggregate-bigwigs` | Aggregate multiple BigWig files into one track |
 | `bigwig-infer-scale` | `infer-scale` | Infer scaling factor and library size from a normalised BigWig |
+| `bam-normalize` | `norm-factors` | Compute between-sample scaling factors (TMM / csaw-background / CPM / median-of-ratios / spike-in) from BAM files |
 | `collapse-bedgraph` | `collapse` | Collapse adjacent equal-score bins in a bedGraph |
 
 ## CLI Filter Flags
@@ -93,6 +98,9 @@ All subcommands that accept `FilterOptions` support:
 | `--barcode-allowlist` | — | Text file of cell barcodes (one per line) |
 | `--read-group` | — | Keep only this RG tag value |
 | `--tag` / `--tag-value` | — | Keep reads where TAG == VALUE |
+| `--ignore-duplicates` | off | Exclude PCR/optical duplicate reads |
+| `--ignore-secondary` | off | Exclude secondary alignments |
+| `--ignore-supplementary` | off | Exclude supplementary alignments |
 
 Old names (e.g. `--proper-pair`, `--min-fragment-length`, `--blacklisted-locations`, `--whitelisted-barcodes`, `--filter-tag`) are kept as compatibility aliases but canonical names above are preferred.
 
@@ -132,6 +140,17 @@ BamReadFilter::new(
 )
 ```
 
+`BamReadFilter::new()` stays 12-arg (non-breaking). Duplicate/secondary/supplementary exclusion, and every other optional constructor field, are also settable via chainable builder methods: `.with_exclude_duplicates(bool)`, `.with_exclude_secondary(bool)`, `.with_exclude_supplementary(bool)` (all default `false`), plus `.with_strand(...)`, `.with_proper_pair(...)`, `.with_min_mapq(...)`, `.with_min_length(...)`, `.with_max_length(...)`, `.with_read_group(...)`, `.with_blacklisted_locations(...)`, `.with_whitelisted_barcodes(...)`, `.with_filter_tag(...)`, `.with_filter_tag_value(...)`, `.with_min_fragment_length(...)`, `.with_max_fragment_length(...)`. Prefer `BamReadFilter::default()` + builder methods over `::new()` with many `None`s for new call sites.
+
+## Between-sample normalization (`bam-normalize`)
+
+Bins the genome, counts filtered reads/fragments per bin per sample (`bin_counts::count_bins`), then estimates a scaling factor per sample (`normalization_factors::compute_scale_factors`) that corrects for composition/technical bias — not just depth. Reports factors only; does not generate bigwigs. Apply the reported `scale_factor` to `bam-coverage -f` / `bigwig-aggregate --scale-factors`.
+
+- Methods: `tmm`, `csaw-background` (default — TMM on large background bins with the top `--exclude-top-percent` most-enriched bins dropped), `cpm`, `median-of-ratios`, `spike-in`.
+- `spike-in` reads mapped-read counts directly from the BAM index (`BamStats::mapped_reads_by_prefix`) — no BAM record scan, unfiltered by MAPQ/duplicates. It ignores `--bin-size` and requires `--exogenous-prefix`; it does not go through `bin_counts`/`compute_scale_factors` at all (handled as a separate branch in both the CLI and the Python binding).
+- All bin-count-based BAM files must share an identical chromosome name → length map (`bin_counts::count_bins` errors otherwise).
+- `--sample-sheet CSV` (with `sample`/`bam` columns) is an alternative to repeated `--bams`; sample names derived from `--bams` file stems are disambiguated (`_1`, `_2`, …) if they collide.
+
 ## Build
 
 ```bash
@@ -155,3 +174,4 @@ maturin build --release  # wheel
 
 - Main branch has protection, needs a PR to merge.
 - `cargo build` (workspace) fails at link stage with pyo3 undefined symbol errors (`_PyBaseObject_Type`, etc.) — Python headers not linked in the dev environment. Use `cargo build -p bamnado` or `cargo test -p bamnado` to build/test the Rust library and CLI without the Python bindings. The pyo3 cdylib in `bamnado-python/` requires `maturin` to build correctly.
+- Run `maturin develop` / `maturin build` from the **repo root** (where `pyproject.toml` lives, with `python-source = "bamnado-python/python"`), not from inside `bamnado-python/`. Running it from the subdirectory silently builds only the `_bamnado` extension module without the `bamnado` Python package wrapper, so `import bamnado` fails afterwards even though the build reports success.

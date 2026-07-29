@@ -122,6 +122,7 @@ bamnado <command> --help            # Help for a specific command
 | `bigwig-compare` | `compare-bigwigs` | Compare two BigWig files bin by bin |
 | `bigwig-aggregate` | `aggregate-bigwigs` | Aggregate multiple BigWig files into one track |
 | `bigwig-infer-scale` | `infer-scale` | Infer scaling factor and library size from a normalised BigWig |
+| `bam-normalize` | `norm-factors` | Compute between-sample scaling factors from BAM files |
 | `collapse-bedgraph` | `collapse` | Collapse adjacent equal-score bins in a bedGraph |
 
 ### Read filtering
@@ -141,6 +142,9 @@ All coverage commands share common read filter flags:
 | `--barcode-allowlist` | — | Text file of cell barcodes (one per line) |
 | `--read-group` | — | Keep only this read group |
 | `--tag` / `--tag-value` | — | Keep reads where TAG == VALUE |
+| `--ignore-duplicates` | off | Exclude PCR/optical duplicate reads |
+| `--ignore-secondary` | off | Exclude secondary alignments |
+| `--ignore-supplementary` | off | Exclude supplementary alignments |
 
 ### Coverage-specific flags
 
@@ -241,6 +245,60 @@ bamnado collapse-bedgraph \
   --input signal.bedgraph \
   --output signal.collapsed.bedgraph
 ```
+
+#### Normalize between ChIP-seq samples
+
+```bash
+bamnado bam-normalize \
+  --bams chip1.bam chip2.bam chip3.bam \
+  --method csaw-background \
+  --bin-size 10000 \
+  --blacklist blacklist.bed
+```
+
+Apply the reported `scale_factor` for each sample to `bam-coverage -f` (or
+`bigwig-aggregate --scale-factors`) when generating tracks for that sample.
+
+## Between-sample normalization
+
+Comparing ChIP-seq / CUT&Tag / CUT&RUN samples side by side requires removing
+composition and technical bias, not just sequencing depth. A sample with a stronger
+pulldown has more of its library consumed by peaks, which deflates its background and
+makes every other region look artificially low relative to a shallower or weaker-pulldown
+sample. Simple total-count (CPM) scaling does not correct for this — it's the same
+problem `csaw::normFactors` / `edgeR::calcNormFactors` (TMM) solve in R/Bioconductor.
+
+`bamnado bam-normalize` bins the genome, counts filtered reads (or fragments) per bin per
+sample, and reports a per-sample scaling factor plus the underlying bin count matrix for
+downstream sanity checks (e.g. M-A plots). It reports factors only — it does not generate
+bigwigs itself.
+
+### Method choice
+
+| Method | When to use |
+| ------ | ----------- |
+| `csaw-background` (default) | Typical composition bias: TMM restricted to large background windows with the most-enriched bins excluded |
+| `tmm` | TMM over all bins, without excluding enriched regions |
+| `cpm` | Naive depth-only baseline, useful for comparison against the other methods |
+| `median-of-ratios` | A robust DESeq2-style alternative estimator |
+| `spike-in` | When a spike-in genome was used and is trusted more than a background estimate |
+
+### Applying the result
+
+`scale_factor` is centred on 1 (the geometric mean across samples), so it can be passed
+directly to `bam-coverage -f <factor>` or `bigwig-aggregate --scale-factors` for each
+corresponding sample.
+
+Use `--counts-out counts.tsv` to write the underlying bin count matrix (chrom, start, end,
+one column per sample) for QC, e.g. plotting an M-A plot to confirm the fitted factor sits
+at the centre of the trimmed M-value cloud.
+
+### Spike-in caveat
+
+The `spike-in` method reads mapped-read counts directly from each BAM's index (no BAM
+record scan), so those counts are **unfiltered** by MAPQ, duplicates, or
+secondary/supplementary status — the same basis as `bam-coverage`'s internal mapped-read
+count. `--exogenous-prefix` is required and `--bin-size` is ignored for this method.
 
 ## Python API
 
@@ -430,6 +488,52 @@ signal = bamnado.get_signal_for_chromosome(
 **Returns:** `numpy.ndarray` of dtype `float32` with length = chromosome size / bin_size
 
 **Note:** Fragment length filtering (`min_fragment_length`, `max_fragment_length`) requires paired-end BAM files and will raise `ValueError` on single-end data.
+
+### Between-sample scaling factors
+
+`compute_scale_factors` mirrors the `bam-normalize` CLI command — see
+[Between-sample normalization](#between-sample-normalization) for the underlying method.
+
+```python
+import bamnado
+
+result = bamnado.compute_scale_factors(
+    ["chip1.bam", "chip2.bam", "chip3.bam"],
+    method="csaw-background",
+    bin_size=10000,
+)
+print(result.sample_names, result.scale_factors)
+
+# Include the bin count matrix for QC (e.g. an M-A plot)
+result = bamnado.compute_scale_factors(
+    ["chip1.bam", "chip2.bam"],
+    method="tmm",
+    return_counts=True,
+)
+counts = result.counts()  # (n_bins, n_samples) uint64 array, or None
+```
+
+#### compute_scale_factors parameters
+
+| Parameter | Type | Default | Description |
+| --------- | ---- | ------- | ----------- |
+| `bam_paths` | `list[str]` | — | Input BAM file paths, one per sample |
+| `method` | `str` | `"csaw-background"` | `"tmm"`, `"csaw-background"`, `"cpm"`, `"median-of-ratios"`, or `"spike-in"` |
+| `bin_size` | `int` | `10000` | Genomic bin width in bp; ignored for `"spike-in"` |
+| `sample_names` | `list[str] \| None` | `None` | Defaults to each BAM's file stem, disambiguated if duplicated |
+| `exclude_top_percent` | `float` | `5.0` | `"csaw-background"` only: percent of highest-mean bins dropped before estimating |
+| `reference_sample` | `str \| None` | `None` | TMM reference sample; defaults to the one closest to the geometric mean |
+| `logratio_trim` | `float` | `0.3` | TMM trim fraction for M-values |
+| `sum_trim` | `float` | `0.05` | TMM trim fraction for A-values |
+| `exogenous_prefix` | `str \| None` | `None` | Required for `method="spike-in"` |
+| `use_fragment` | `bool` | `False` | Count fragments (pairs) instead of individual reads |
+| `ignore_scaffold_chromosomes` | `bool` | `True` | Skip scaffold / unplaced chromosomes |
+| `read_filter` | `ReadFilter \| None` | `None` | Applied per sample |
+| `return_counts` | `bool` | `False` | Populate `ScaleFactorResult.counts()` |
+
+**Returns:** `ScaleFactorResult` with `method`, `sample_names`, `library_sizes`,
+`norm_factors`, `scale_factors`, `reference_sample`, `n_bins_total`, `n_bins_used`, and
+(when `return_counts=True`) `counts()`, `bin_chroms`, `bin_starts`, `bin_ends`.
 
 ## Development
 
