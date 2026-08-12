@@ -1,9 +1,9 @@
 (function() {
-    const implementors = Object.fromEntries([["bamnado",[["impl <a class=\"trait\" href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serialize.html\" title=\"trait serde_core::ser::Serialize\">Serialize</a> for <a class=\"struct\" href=\"bamnado/spike_in_analysis/struct.SplitStats.html\" title=\"struct bamnado::spike_in_analysis::SplitStats\">SplitStats</a>",0]]]]);
+    const implementors = Object.fromEntries([["bamnado",[["impl <a class=\"trait\" href=\"https://docs.rs/serde_core/1.0.229/serde_core/ser/trait.Serialize.html\" title=\"trait serde_core::ser::Serialize\">Serialize</a> for <a class=\"enum\" href=\"bamnado/bigwig_infer_scale/enum.NormMethod.html\" title=\"enum bamnado::bigwig_infer_scale::NormMethod\">NormMethod</a>",0],["impl <a class=\"trait\" href=\"https://docs.rs/serde_core/1.0.229/serde_core/ser/trait.Serialize.html\" title=\"trait serde_core::ser::Serialize\">Serialize</a> for <a class=\"struct\" href=\"bamnado/bigwig_infer_scale/struct.InferScaleResult.html\" title=\"struct bamnado::bigwig_infer_scale::InferScaleResult\">InferScaleResult</a>",0],["impl <a class=\"trait\" href=\"https://docs.rs/serde_core/1.0.229/serde_core/ser/trait.Serialize.html\" title=\"trait serde_core::ser::Serialize\">Serialize</a> for <a class=\"struct\" href=\"bamnado/bigwig_infer_scale/struct.Warnings.html\" title=\"struct bamnado::bigwig_infer_scale::Warnings\">Warnings</a>",0],["impl <a class=\"trait\" href=\"https://docs.rs/serde_core/1.0.229/serde_core/ser/trait.Serialize.html\" title=\"trait serde_core::ser::Serialize\">Serialize</a> for <a class=\"struct\" href=\"bamnado/normalization_factors/struct.ScaleFactors.html\" title=\"struct bamnado::normalization_factors::ScaleFactors\">ScaleFactors</a>",0],["impl <a class=\"trait\" href=\"https://docs.rs/serde_core/1.0.229/serde_core/ser/trait.Serialize.html\" title=\"trait serde_core::ser::Serialize\">Serialize</a> for <a class=\"struct\" href=\"bamnado/spike_in_analysis/struct.SplitStats.html\" title=\"struct bamnado::spike_in_analysis::SplitStats\">SplitStats</a>",0]]]]);
     if (window.register_implementors) {
         window.register_implementors(implementors);
     } else {
         window.pending_implementors = implementors;
     }
 })()
-//{"start":59,"fragment_lengths":[333]}
+//{"start":59,"fragment_lengths":[1639]}

@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"mod":["bam_modifier","bam_splitter","bam_utils","bedgraph_utils","bigwig_compare","coverage_analysis","genomic_intervals","read_filter","signal_normalization","spike_in_analysis"]};
+window.SIDEBAR_ITEMS = {"mod":["bam_modifier","bam_splitter","bam_utils","bedgraph_utils","bigwig_compare","bigwig_infer_scale","bin_counts","cli","coverage_analysis","genomic_intervals","normalization_factors","read_filter","signal_normalization","spike_in_analysis"]};

@@ -1,2 +1,2 @@
-createSrcSidebar('[["_bamnado",["",[],["lib.rs"]]],["bamnado",["",[],["bam_modifier.rs","bam_splitter.rs","bam_utils.rs","bedgraph_utils.rs","bigwig_compare.rs","coverage_analysis.rs","genomic_intervals.rs","lib.rs","read_filter.rs","signal_normalization.rs","spike_in_analysis.rs"]]]]');
-//{"start":19,"fragment_lengths":[31,234]}
+createSrcSidebar('[["_bamnado",["",[],["lib.rs"]]],["bamnado",["",[],["bam_modifier.rs","bam_splitter.rs","bam_utils.rs","bedgraph_utils.rs","bigwig_compare.rs","bigwig_infer_scale.rs","bin_counts.rs","cli.rs","coverage_analysis.rs","genomic_intervals.rs","lib.rs","normalization_factors.rs","read_filter.rs","signal_normalization.rs","spike_in_analysis.rs"]]]]');
+//{"start":19,"fragment_lengths":[31,310]}

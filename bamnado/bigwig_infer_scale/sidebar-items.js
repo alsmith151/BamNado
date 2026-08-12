@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["NormMethod"],"fn":["infer_scale_factor"],"struct":["InferScaleConfig","InferScaleResult","Warnings"]};

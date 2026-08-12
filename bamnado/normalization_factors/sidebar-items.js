@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["NormFactorMethod"],"fn":["compute_scale_factors","estimator_for","spike_in_scale_factors"],"struct":["Cpm","CsawBackground","MedianOfRatios","NormFactorParams","ScaleFactors","Tmm"],"trait":["NormFactorEstimator"]};
